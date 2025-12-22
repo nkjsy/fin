@@ -1,2 +1,7 @@
 yfinance
-seaborn
+pandas
+pandas-ta
+plotly
+fastparquet
+lxml
+openpyxl
