@@ -28,15 +28,11 @@ def main():
 
     # Load Data
     print(f"Loading data for {TICKER}...")
-    df = data_manager.load_data(TICKER, TIMEFRAME)
+    df = data_manager.get_data(TICKER, TIMEFRAME)
     
     if df.empty:
-        print(f"Data not found for {TICKER}. Downloading...")
-        data_manager.update_universe([TICKER], TIMEFRAME)
-        df = data_manager.load_data(TICKER, TIMEFRAME)
-        if df.empty:
-            print("Failed to download data.")
-            return
+        print("Failed to download data.")
+        return
     else:
         print(f"Loaded {len(df)} rows of data.")
 

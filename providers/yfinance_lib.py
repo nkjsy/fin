@@ -1,9 +1,9 @@
 import yfinance as yf
 import pandas as pd
-from interfaces import IDataProvider
+from providers.interfaces import IDataProvider
 
 class YFinanceProvider(IDataProvider):
-    def get_history(self, ticker: str, interval: str, period: str = "max") -> pd.DataFrame:
+    def get_history(self, ticker: str, interval: str, period: str = "max", end_date: str = None) -> pd.DataFrame:
         # Map custom intervals to yfinance intervals
         interval_map = {
             "daily1": "1d",
@@ -16,7 +16,14 @@ class YFinanceProvider(IDataProvider):
         try:
             # yfinance intervals: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
             stock = yf.Ticker(ticker)
-            df = stock.history(period=period, interval=yf_interval)
+            
+            if end_date:
+                # If end_date is provided, fetch a small window before it to ensure we get the last trading day
+                end_dt = pd.to_datetime(end_date)
+                start_dt = end_dt - pd.Timedelta(days=7) # 7 days buffer for weekends/holidays
+                df = stock.history(start=start_dt, end=end_dt, interval=yf_interval)
+            else:
+                df = stock.history(period=period, interval=yf_interval)
             
             if df.empty:
                 return pd.DataFrame()

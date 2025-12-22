@@ -1,4 +1,3 @@
-import sys
 import os
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,26 +14,26 @@ RSI_PERIOD = 14
 INITIAL_CAPITAL = 10000.0
 MIN_PRICE = 100.0
 MIN_VOLUME = 1000000.0
+CURRENT_DATE = None # Set to "YYYY-MM-DD" to simulate a specific day, or None for today
 # ---------------------
 
 def main():
     # Initialize
     provider = YFinanceProvider()
     data_manager = DataManager(DATA_DIR, provider)
-    scanner = SimpleScanner(DATA_DIR)
+    scanner = SimpleScanner()
 
     print("--- Starting Automated Trading Flow ---")
+    if CURRENT_DATE:
+        print(f"Simulation Date: {CURRENT_DATE}")
 
     # 1. Scan for stocks
     print("Scanning for stocks...")
-    # Ensure summary exists, if not, we might need to update universe first.
-    # For this flow, we assume data exists or we run a quick update on a small list if needed.
-    # But let's assume the user has run an update before or we just use what's there.
     
     tickers = scanner.scan(min_price=MIN_PRICE, min_volume=MIN_VOLUME)
     
     if not tickers:
-        print("No stocks found matching criteria. Please update data or change criteria.")
+        print("No stocks found matching criteria.")
         return
 
     print(f"Found {len(tickers)} stocks: {tickers}")
@@ -43,18 +42,14 @@ def main():
     results = []
 
     for ticker in tickers:
-        print(f"\nProcessing {ticker}...")
+        print(f"Processing {ticker}...")
         
-        # Load Data
-        df = data_manager.load_data(ticker, TIMEFRAME)
+        # Fetch fresh data directly
+        df = data_manager.get_data(ticker, TIMEFRAME, end_date=CURRENT_DATE)
         
         if df.empty:
-            print(f"Data not found for {ticker}. Downloading...")
-            data_manager.update_universe([ticker], TIMEFRAME)
-            df = data_manager.load_data(ticker, TIMEFRAME)
-            if df.empty:
-                print("Failed to download data.")
-                return
+            print(f"Data empty for {ticker}. Skipping...")
+            continue
 
         # Run Strategy
         strategy = RsiStrategy(rsi_period=RSI_PERIOD)
