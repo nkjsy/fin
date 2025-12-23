@@ -66,14 +66,14 @@ class DataManager:
                 info = yf.Ticker(ticker).info
                 
                 # Extract required fields
-                prev_close = info.get("previousClose")
+                price = info.get("fiftyDayAverage")
                 volume = info.get("volume")
                 float_shares = info.get("floatShares")
                 
-                if prev_close is not None:
+                if price is not None:
                     summary_data.append({
                         "Ticker": ticker,
-                        "Close": prev_close,
+                        "Price": price,
                         "Volume": volume,
                         "FloatShares": float_shares
                     })

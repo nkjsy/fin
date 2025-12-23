@@ -6,31 +6,29 @@ from data_manager import DataManager
 from strategy import RsiStrategy
 from backtester import BacktestEngine
 from scanner import MomentumScanner
-from utils import get_us_stocks
+from utils import get_us_stocks, get_next_day
 
 # --- CONFIGURATION ---
 DATA_DIR = "data"
-TIMEFRAME = "daily1"
+TIMEFRAME = "minute5"
 RSI_PERIOD = 14
 INITIAL_CAPITAL = 10000.0
 MIN_PRICE = 2
 MAX_PRICE = 30
 MAX_FLOAT = 100000000  # 100 million shares
-CURRENT_DATE = None # Set to "YYYY-MM-DD" to simulate a specific day, or None for today
+CURRENT_DATE = "2025-12-22" # Set to "YYYY-MM-DD" to simulate a specific trading day
 # ---------------------
 
-def ensure_universe_data(data_manager, interval, current_date=None):
-    summary_path = os.path.join(data_manager.data_dir, "universe_summary.parquet")
+def ensure_universe_data(data_manager, interval, current_date):
+    summary_path = os.path.join(data_manager.data_dir, f"universe_summary_{current_date}.parquet")
     # If simulating a specific date, we might want to force update or check if summary is fresh enough?
     # For simplicity, let's assume if summary exists, it's good, unless we want to force it.
     # But if we change dates, the old summary might be wrong. 
     # Let's just update if it doesn't exist or if we are in simulation mode (to be safe).
     
-    if not os.path.exists(summary_path) or current_date is not None:
-        print("Updating universe summary...")
+    if not os.path.exists(summary_path):
+        print(f"Updating universe summary on {current_date}...")
         tickers = get_us_stocks(20)
-        # Limit to first 50 for speed if needed, or full list
-        # tickers = tickers[:50] 
         data_manager.update_universe(tickers, interval, current_date=current_date)
 
 def main():
@@ -39,33 +37,31 @@ def main():
     data_manager = DataManager(DATA_DIR, provider)
     scanner = MomentumScanner(DATA_DIR)
 
-    print("--- Starting Automated Trading Flow ---")
-    if CURRENT_DATE:
-        print(f"Simulation Date: {CURRENT_DATE}")
+    print(f"--- Starting Automated Trading Flow on {CURRENT_DATE} ---")
 
-    # 0. Ensure Universe Data
+    # 0. Ensure Universe Data reflects the day before CURRENT_DATE
     ensure_universe_data(data_manager, TIMEFRAME, current_date=CURRENT_DATE)
 
     # 1. Scan for stocks
     print("Scanning for stocks...")
     
-    tickers = scanner.scan(min_price=MIN_PRICE, max_price=MAX_PRICE, max_float=MAX_FLOAT)
+    tickers = scanner.scan(current_date=CURRENT_DATE, min_price=MIN_PRICE, max_price=MAX_PRICE, max_float=MAX_FLOAT)
     
     if not tickers:
         print("No stocks found matching criteria. Please update data or change criteria.")
         return
 
-    print(f"Found {len(tickers)} stocks: {tickers}")
+    print(f"Scanner found {len(tickers)} stocks: {tickers}")
 
     # 2. Run Strategy on each stock
     results = []
+    next_date = get_next_day(CURRENT_DATE) # in order to get current date data
 
     for ticker in tickers:
         print(f"Processing {ticker}...")
         
-        # Always download fresh data to ensure integrity and prevent look-ahead bias
-        # Overwrite existing data with data up to CURRENT_DATE
-        success = data_manager.download_data(ticker, TIMEFRAME, end_date=CURRENT_DATE)
+        # Always download fresh data and overwrite old data to ensure integrity and prevent look-ahead bias
+        success = data_manager.download_data(ticker, TIMEFRAME, end_date=next_date)
         if not success:
             print(f"Failed to download data for {ticker}. Skipping...")
             continue

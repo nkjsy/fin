@@ -1,6 +1,6 @@
 import pandas as pd
 import requests
-from yfinance import EquityQuery
+from datetime import datetime, timedelta
 
 def get_sp500_tickers():
     try:
@@ -38,6 +38,11 @@ def get_us_stocks(limit=-1):
     except Exception as e:
         print(f"Error fetching US stocks: {e}")
         return []
+    
+def get_next_day(date_str):
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    next_day = date_obj + timedelta(days=1)
+    return next_day.strftime("%Y-%m-%d")
 
 if __name__ == "__main__":
     # sp = get_sp500_tickers()
