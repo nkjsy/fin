@@ -93,3 +93,12 @@ class DataManager:
             print(f"Universe summary updated with {len(summary_df)} records.")
         else:
             print("No data fetched.")
+
+
+    def get_data(self, ticker: str, interval: str, period: str = "1y", end_date: str = None) -> pd.DataFrame:
+        """
+        Fetches data for a single ticker directly from the provider.
+        Does not save to disk.
+        """
+        print(f"Fetching data for {ticker}...")
+        return self.provider.get_history(ticker, interval, period, end_date=end_date)

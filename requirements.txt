@@ -5,3 +5,4 @@ plotly
 fastparquet
 lxml
 openpyxl
+requests

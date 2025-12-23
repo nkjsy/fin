@@ -6,6 +6,8 @@ class BaseScanner(ABC):
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
         self.summary_path = os.path.join(data_dir, "universe_summary.parquet")
+        # if using yfinance.screen, max 250 tickers returned
+        self.limit = 250
 
     def load_summary(self) -> pd.DataFrame:
         if os.path.exists(self.summary_path):

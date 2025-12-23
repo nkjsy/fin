@@ -5,8 +5,7 @@ from providers.yfinance_lib import YFinanceProvider
 from data_manager import DataManager
 from strategy import RsiStrategy
 from backtester import BacktestEngine
-from scanner import SimpleScanner
-from utils import get_us_stocks
+from scanner import YFScanner
 
 # --- CONFIGURATION ---
 DATA_DIR = "data"
@@ -18,32 +17,15 @@ MIN_VOLUME = 1000000.0
 CURRENT_DATE = None # Set to "YYYY-MM-DD" to simulate a specific day, or None for today
 # ---------------------
 
-def ensure_universe_data(data_manager, interval, current_date=None):
-    summary_path = os.path.join(data_manager.data_dir, "universe_summary.parquet")
-    # If simulating a specific date, we might want to force update or check if summary is fresh enough?
-    # For simplicity, let's assume if summary exists, it's good, unless we want to force it.
-    # But if we change dates, the old summary might be wrong. 
-    # Let's just update if it doesn't exist or if we are in simulation mode (to be safe).
-    
-    if not os.path.exists(summary_path) or current_date is not None:
-        print("Updating universe summary...")
-        tickers = get_us_stocks()
-        # Limit to first 50 for speed if needed, or full list
-        # tickers = tickers[:50] 
-        data_manager.update_universe(tickers, interval, current_date=current_date)
-
 def main():
     # Initialize
     provider = YFinanceProvider()
     data_manager = DataManager(DATA_DIR, provider)
-    scanner = SimpleScanner(DATA_DIR)
+    scanner = YFScanner(DATA_DIR)
 
     print("--- Starting Automated Trading Flow ---")
     if CURRENT_DATE:
         print(f"Simulation Date: {CURRENT_DATE}")
-
-    # 0. Ensure Universe Data
-    ensure_universe_data(data_manager, TIMEFRAME, current_date=CURRENT_DATE)
 
     # 1. Scan for stocks
     print("Scanning for stocks...")
@@ -51,7 +33,7 @@ def main():
     tickers = scanner.scan(min_price=MIN_PRICE, min_volume=MIN_VOLUME)
     
     if not tickers:
-        print("No stocks found matching criteria. Please update data or change criteria.")
+        print("No stocks found matching criteria.")
         return
 
     print(f"Found {len(tickers)} stocks: {tickers}")
@@ -62,15 +44,8 @@ def main():
     for ticker in tickers:
         print(f"Processing {ticker}...")
         
-        # Always download fresh data to ensure integrity and prevent look-ahead bias
-        # Overwrite existing data with data up to CURRENT_DATE
-        success = data_manager.download_data(ticker, TIMEFRAME, end_date=CURRENT_DATE)
-        if not success:
-            print(f"Failed to download data for {ticker}. Skipping...")
-            continue
-
-        # Load Data
-        df = data_manager.load_data(ticker, TIMEFRAME)
+        # Fetch fresh data directly
+        df = data_manager.get_data(ticker, TIMEFRAME, end_date=CURRENT_DATE)
         
         if df.empty:
             print(f"Data empty for {ticker}. Skipping...")
