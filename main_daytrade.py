@@ -5,7 +5,7 @@ from providers.yfinance_lib import YFinanceProvider
 from data_manager import DataManager
 from strategy import RsiStrategy
 from backtester import BacktestEngine
-from scanner import SimpleScanner
+from scanner import MomentumScanner
 from utils import get_us_stocks
 
 # --- CONFIGURATION ---
@@ -13,8 +13,9 @@ DATA_DIR = "data"
 TIMEFRAME = "daily1"
 RSI_PERIOD = 14
 INITIAL_CAPITAL = 10000.0
-MIN_PRICE = 100.0
-MIN_VOLUME = 1000000.0
+MIN_PRICE = 2
+MAX_PRICE = 30
+MAX_FLOAT = 100000000  # 100 million shares
 CURRENT_DATE = None # Set to "YYYY-MM-DD" to simulate a specific day, or None for today
 # ---------------------
 
@@ -27,7 +28,7 @@ def ensure_universe_data(data_manager, interval, current_date=None):
     
     if not os.path.exists(summary_path) or current_date is not None:
         print("Updating universe summary...")
-        tickers = get_us_stocks()
+        tickers = get_us_stocks(20)
         # Limit to first 50 for speed if needed, or full list
         # tickers = tickers[:50] 
         data_manager.update_universe(tickers, interval, current_date=current_date)
@@ -36,7 +37,7 @@ def main():
     # Initialize
     provider = YFinanceProvider()
     data_manager = DataManager(DATA_DIR, provider)
-    scanner = SimpleScanner(DATA_DIR)
+    scanner = MomentumScanner(DATA_DIR)
 
     print("--- Starting Automated Trading Flow ---")
     if CURRENT_DATE:
@@ -48,7 +49,7 @@ def main():
     # 1. Scan for stocks
     print("Scanning for stocks...")
     
-    tickers = scanner.scan(min_price=MIN_PRICE, min_volume=MIN_VOLUME)
+    tickers = scanner.scan(min_price=MIN_PRICE, max_price=MAX_PRICE, max_float=MAX_FLOAT)
     
     if not tickers:
         print("No stocks found matching criteria. Please update data or change criteria.")
@@ -84,7 +85,7 @@ def main():
         
         results.append({
             "Ticker": ticker,
-            "Final Equity": metrics['Final Equity'],
+            "Final-Equity": metrics['Final-Equity'],
             "Return %": metrics['Return %'],
             "Trades": metrics['Trades'],
             "Trades_Log": trades,

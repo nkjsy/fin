@@ -1,5 +1,7 @@
 import os
 import pandas as pd
+from tqdm import tqdm
+import yfinance as yf
 from providers.interfaces import IDataProvider
 
 class DataManager:
@@ -52,39 +54,33 @@ class DataManager:
 
     def update_universe(self, tickers: list, interval: str, current_date: str = None):
         """
-        Fetches latest data for all tickers to create a summary index.
+        Fetches latest data for all tickers to create a summary index using yf.Ticker.info.
         Does NOT save individual ticker history to disk.
-        If current_date is provided, fetches the data for the trading day immediately preceding it.
         """
         summary_data = []
         
         print(f"Starting universe summary update for {len(tickers)} tickers...")
         
-        for ticker in tickers:
-            # Fetch only recent data to get the latest quote/volume
-            # If current_date is set, get_history handles the window ending at current_date
-            # If not set, we use period="5d" to get recent data
-            if current_date:
-                df = self.provider.get_history(ticker, interval, end_date=current_date)
-            else:
-                df = self.provider.get_history(ticker, interval, period="5d")
-            
-            if not df.empty:
-                # We do NOT save to disk here, to avoid overwriting full history with partial data
+        for ticker in tqdm(tickers):
+            try:
+                info = yf.Ticker(ticker).info
                 
-                # Create summary info (last row)
-                last_row = df.iloc[-1]
+                # Extract required fields
+                prev_close = info.get("previousClose")
+                volume = info.get("volume")
+                float_shares = info.get("floatShares")
                 
-                # Handle different index names (Date vs Datetime)
-                date_val = last_row.get("Date") if "Date" in last_row else last_row.name
-                
-                summary_data.append({
-                    "Ticker": ticker,
-                    "Date": date_val,
-                    "Close": last_row["Close"],
-                    "Volume": last_row["Volume"]
-                })
+                if prev_close is not None:
+                    summary_data.append({
+                        "Ticker": ticker,
+                        "Close": prev_close,
+                        "Volume": volume,
+                        "FloatShares": float_shares
+                    })
+            except Exception as e:
+                print(f"Failed to fetch info for {ticker}: {e}")
         
+        print(f"Successfully fetched data for {len(summary_data)} tickers.")
         # Save summary index
         if summary_data:
             summary_df = pd.DataFrame(summary_data)

@@ -11,7 +11,7 @@ class BaseScanner(ABC):
 
     def load_summary(self) -> pd.DataFrame:
         if os.path.exists(self.summary_path):
-            return pd.read_parquet(self.summary_path)
+            return pd.read_parquet(self.summary_path, engine='fastparquet')
         return pd.DataFrame()
 
     @abstractmethod

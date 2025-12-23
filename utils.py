@@ -12,7 +12,7 @@ def get_sp500_tickers():
         print(f"Error fetching S&P 500: {e}")
         return ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"] # Fallback
 
-def get_us_stocks():
+def get_us_stocks(limit=-1):
     url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -27,7 +27,7 @@ def get_us_stocks():
         # Clean symbols
         # NASDAQ uses '/' for classes (e.g. BRK/B) and '^' for other things.
         # yfinance uses '-' for classes (e.g. BRK-B).
-        symbols = df['symbol'].tolist()
+        symbols = df['symbol'].tolist()[:limit]
         cleaned_symbols = []
         for s in symbols:
             s = s.replace('/', '-')

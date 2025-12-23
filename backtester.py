@@ -59,7 +59,7 @@ class BacktestEngine:
         df["Equity"] = equity_curve
         
         results = {
-            "Final Equity": equity_curve[-1],
+            "Final-Equity": equity_curve[-1],
             "Return %": ((equity_curve[-1] - self.initial_capital) / self.initial_capital) * 100,
             "Trades": len(trade_log)
         }
