@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from providers.yfinance_lib import YFinanceProvider
 from data_manager import DataManager
-from strategy import RsiStrategy
+from strategy import BullFlagStrategy, RsiStrategy
 from backtester import BacktestEngine
 from scanner import MomentumScanner
 from utils import get_us_stocks, get_next_day
@@ -11,12 +11,15 @@ from utils import get_us_stocks, get_next_day
 # --- CONFIGURATION ---
 DATA_DIR = "data"
 TIMEFRAME = "minute5"
-RSI_PERIOD = 14
 INITIAL_CAPITAL = 10000.0
 MIN_PRICE = 2
 MAX_PRICE = 30
 MAX_FLOAT = 100000000  # 100 million shares
 CURRENT_DATE = "2025-12-22" # Set to "YYYY-MM-DD" to simulate a specific trading day
+
+# Strategy Config
+STRATEGY_TYPE = BullFlagStrategy  
+# Options: "BullFlagStrategy", "RsiStrategy"
 # ---------------------
 
 def ensure_universe_data(data_manager, interval, current_date):
@@ -74,7 +77,7 @@ def main():
             continue
 
         # Run Strategy
-        strategy = RsiStrategy(rsi_period=RSI_PERIOD)
+        strategy = STRATEGY_TYPE()
         engine = BacktestEngine(initial_capital=INITIAL_CAPITAL)
         
         df_res, trades, metrics = engine.run(df, strategy)
@@ -130,7 +133,7 @@ def main():
                                          marker=dict(symbol="triangle-down", size=12, color="red"), name="Sell"))
 
         fig.update_layout(
-            title=f"{best_ticker} - {TIMEFRAME} (RSI Strategy)",
+            title=f"{best_ticker} - {TIMEFRAME} - {STRATEGY_TYPE.__name__}",
             height=800,
             xaxis_rangeslider_visible=False
         )
