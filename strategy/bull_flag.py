@@ -130,7 +130,7 @@ class BullFlagStrategy(BaseStrategy):
             
             # Volume Condition: Current Vol > Baseline Vol (from 9:30-9:40)
             # If Baseline Vol is 0 (missing data), condition fails
-            vol_cond = (curr_vol > baseline_volume) if baseline_volume > 0 else False
+            vol_cond = (curr_vol >= baseline_volume) if baseline_volume > 0 else False
             
             if state == 'SCANNING':
                 if is_green:
