@@ -64,7 +64,7 @@ def main():
         print(f"Processing {ticker}...")
         
         # Always download fresh data and overwrite old data to ensure integrity and prevent look-ahead bias
-        success = data_manager.download_data(ticker, TIMEFRAME, end_date=next_date)
+        success = data_manager.download_data(ticker, TIMEFRAME, end_date=next_date, period="1d")
         if not success:
             print(f"Failed to download data for {ticker}. Skipping...")
             continue

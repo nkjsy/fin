@@ -1,12 +1,13 @@
 import pandas as pd
 import pandas_ta as ta
+from datetime import time as dt_time
 from .base import BaseStrategy
 
 class BullFlagStrategy(BaseStrategy):
     """
     A strategy of day trading, based on 1m or 5m charts.
     The entry conditions are:
-    1. The price increases for at least 2 green bars by a certain percentage. At the same time, the volumes are also N times higher than the same time yesterday.
+    1. The price increases for at least 2 green bars by a certain percentage. At the same time, the volumes are no less than between 9:30 - 9:40. The input dataframe is guaranteed only 1 day data.
     2. Once a red bar follows the green bars, the price should not drop below the 50% of the previous high, and the price should not drop below the 9 period EMA, and the volume should be less than those in the green bars.
     Look for the first bar which has a higher high price than its previous bar's high price. This price is the entry price.
     
@@ -18,22 +19,19 @@ class BullFlagStrategy(BaseStrategy):
     """
     def __init__(self, 
                  min_green_bars: int = 2, 
-                 price_increase_pct: float = 0.1, 
-                 volume_factor: float = 2.0, 
+                 price_increase_pct: float = 1, 
                  ema_period: int = 9,
                  pullback_retracement: float = 0.5):
         """
         Args:
             min_green_bars: Minimum number of consecutive green bars.
             price_increase_pct: Minimum percentage increase during the green run (e.g. 1.0 for 1%).
-            volume_factor: Volume must be N times higher than the same time yesterday.
             ema_period: Period for the EMA support.
             pullback_retracement: Max retracement allowed (0.5 for 50%).
         """
         super().__init__("Bull Flag Strategy")
         self.min_green_bars = min_green_bars
         self.price_increase_pct = price_increase_pct / 100.0
-        self.volume_factor = volume_factor
         self.ema_period = ema_period
         self.pullback_retracement = pullback_retracement
 
@@ -49,41 +47,19 @@ class BullFlagStrategy(BaseStrategy):
         ema_result = ta.ema(df['Close'], length=self.ema_period)
         df['EMA'] = ema_result
         
-        # Get Previous Day Volume
-        # We attempt to shift the data by 1 day to align timestamps.
-        # This requires a DatetimeIndex.
-        if isinstance(df.index, pd.DatetimeIndex):
-            # Shift the Volume column forward by 1 day (24 hours)
-            # Note: This assumes the index is timezone-aware or consistent.
-            # If weekends are skipped in the index, '1D' shift might land on a non-existent time.
-            # However, we can't easily map "trading day - 1" without a calendar.
-            # We will try to use the exact timestamp - 1 day.
-            
-            # Create a series with the index shifted by 1 Day
-            # We want: Value at T = Volume at (T - 1 Day)
-            # So we take the Volume series, shift its index by +1 Day, and reindex to original.
-            
-            # Actually, df.shift(freq='1D') moves the data at T to T+1D.
-            # So the value at T+1D becomes the value from T.
-            # This is exactly what we want: At T+1D, we want to see T's volume.
-            
-            try:
-                shifted_vol = df['Volume'].shift(freq='1D')
-                # Rename and join
-                shifted_vol.name = 'Volume_Prev'
-                # We need to join on index. 
-                # Since shift(freq) preserves the index type, we can join.
-                # But we must handle duplicates if any.
-                df = df.join(shifted_vol)
-            except Exception as e:
-                # Fallback if shift fails (e.g. non-unique index)
-                df['Volume_Prev'] = 0
-        else:
-            df['Volume_Prev'] = 0
-            
-        # Fill NaNs in Volume_Prev with 0 or handle in logic
-        df['Volume_Prev'] = df['Volume_Prev'].fillna(0)
-
+        # Get Baseline Volume from 9:30-9:40 (first 10 minutes of trading day)
+        # The input dataframe is guaranteed to contain only 1 day of data
+        baseline_volume = 0.0
+        if isinstance(df.index, pd.DatetimeIndex) and len(df) > 0:
+            # Filter bars between 9:30 and 9:40
+            times = df.index.time
+            start_time = dt_time(9, 30)
+            end_time = dt_time(9, 40)
+            baseline_mask = (times >= start_time) & (times < end_time)
+            baseline_bars = df.loc[baseline_mask, 'Volume']
+            if len(baseline_bars) > 0:
+                baseline_volume = baseline_bars.mean()
+        
         # Initialize columns
         df['Signal'] = 0
         df['Entry_Price'] = 0.0
@@ -133,7 +109,6 @@ class BullFlagStrategy(BaseStrategy):
         highs = df['High'].values
         lows = df['Low'].values
         volumes = df['Volume'].values
-        vol_prevs = df['Volume_Prev'].values
         emas = df['EMA'].values
         is_greens = df['is_green'].values
         is_reds = df['is_red'].values
@@ -145,7 +120,6 @@ class BullFlagStrategy(BaseStrategy):
             curr_high = highs[i]
             curr_low = lows[i]
             curr_vol = volumes[i]
-            curr_vol_prev = vol_prevs[i]
             curr_ema = emas[i]
             is_green = is_greens[i]
             is_red = is_reds[i]
@@ -154,9 +128,9 @@ class BullFlagStrategy(BaseStrategy):
             prev_high = highs[i-1]
             prev_close = closes[i-1]
             
-            # Volume Condition: Current Vol > N * Prev Vol
-            # If Prev Vol is 0 (missing data), condition fails
-            vol_cond = (curr_vol > self.volume_factor * curr_vol_prev) if curr_vol_prev > 0 else False
+            # Volume Condition: Current Vol > Baseline Vol (from 9:30-9:40)
+            # If Baseline Vol is 0 (missing data), condition fails
+            vol_cond = (curr_vol > baseline_volume) if baseline_volume > 0 else False
             
             if state == 'SCANNING':
                 if is_green:

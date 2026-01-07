@@ -23,7 +23,7 @@ class MomentumScanner(BaseScanner):
         TIMEFRAME = "minute5"
         DATA_DIR = "data"
         PERIOD = "2d"
-        RELATIVE_VOLUME_THRESHOLD = 2.0
+        RELATIVE_VOLUME_THRESHOLD = 5.0
         PRICE_GAP_THRESHOLD = 0.03  # 3%
 
         next_date = get_next_day(current_date) # in order to get current date data
