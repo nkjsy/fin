@@ -20,40 +20,46 @@ class BacktestEngine:
         
         for i in range(len(df)):
             row = df.iloc[i]
-            price = row["Close"]
+            close_price = row["Close"]
             signal = row["Signal"]
             date = row["Date"]
+            entry_price = row.get("Entry_Price", 0.0)
+            exit_price = row.get("Exit_Price", 0.0)
             
             # Execute Trade
             if signal == 1 and cash > 0: # Buy
+                # Use Entry_Price if available, otherwise fall back to Close
+                buy_price = entry_price if entry_price > 0 else close_price
                 # Buy max shares
-                shares_to_buy = int(cash // price)
+                shares_to_buy = int(cash // buy_price)
                 if shares_to_buy > 0:
-                    cost = shares_to_buy * price
+                    cost = shares_to_buy * buy_price
                     cash -= cost
                     position += shares_to_buy
                     trade_log.append({
                         "Date": date,
                         "Action": "BUY",
-                        "Price": price,
+                        "Price": buy_price,
                         "Shares": shares_to_buy,
                         "Value": cost
                     })
             
             elif signal == -1 and position > 0: # Sell
-                revenue = position * price
+                # Use Exit_Price if available, otherwise fall back to Close
+                sell_price = exit_price if exit_price > 0 else close_price
+                revenue = position * sell_price
                 cash += revenue
                 trade_log.append({
                     "Date": date,
                     "Action": "SELL",
-                    "Price": price,
+                    "Price": sell_price,
                     "Shares": position,
                     "Value": revenue
                 })
                 position = 0
             
             # Record Equity
-            equity = cash + (position * price)
+            equity = cash + (position * close_price)
             equity_curve.append(equity)
             
         df["Equity"] = equity_curve

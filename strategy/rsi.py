@@ -18,6 +18,9 @@ class RsiStrategy(BaseStrategy):
         
         # Generate Signals
         df["Signal"] = 0
+        df["Entry_Price"] = 0.0
+        df["Exit_Price"] = 0.0
+        df["Stop_Loss"] = 0.0
         
         # Buy when RSI crosses above buy_threshold (oversold)
         # Simple logic: If RSI < threshold, Buy. (Or crossover logic)
@@ -25,7 +28,18 @@ class RsiStrategy(BaseStrategy):
         # Buy if RSI < 30
         # Sell if RSI > 70
         
-        df.loc[df["RSI"] < self.buy_threshold, "Signal"] = 1
-        df.loc[df["RSI"] > self.sell_threshold, "Signal"] = -1
+        # RSI is calculated using Close price, so signal is known at bar close
+        # For realistic execution without look-ahead bias:
+        # - We use Close price as entry/exit (assuming we can execute at close)
+        # - Alternative would be next bar's Open, but that requires shifting
+        
+        buy_mask = df["RSI"] < self.buy_threshold
+        sell_mask = df["RSI"] > self.sell_threshold
+        
+        df.loc[buy_mask, "Signal"] = 1
+        df.loc[buy_mask, "Entry_Price"] = df.loc[buy_mask, "Close"]
+        
+        df.loc[sell_mask, "Signal"] = -1
+        df.loc[sell_mask, "Exit_Price"] = df.loc[sell_mask, "Close"]
         
         return df
