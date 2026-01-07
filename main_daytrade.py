@@ -13,7 +13,7 @@ DATA_DIR = "data"
 TIMEFRAME = "minute5"
 INITIAL_CAPITAL = 10000.0
 MIN_PRICE = 2
-MAX_PRICE = 30
+MAX_PRICE = 50
 MAX_FLOAT = 100000000  # 100 million shares
 CURRENT_DATE = "2025-12-30" # Set to "YYYY-MM-DD" to simulate a specific trading day
 
@@ -31,7 +31,7 @@ def ensure_universe_data(data_manager, interval, current_date):
     
     if not os.path.exists(summary_path):
         print(f"Updating universe summary on {current_date}...")
-        tickers = get_us_stocks(500)
+        tickers = get_us_stocks(900)
         data_manager.update_universe(tickers, interval, current_date=current_date)
 
 def main():

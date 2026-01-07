@@ -18,7 +18,7 @@ class BullFlagStrategy(BaseStrategy):
     """
     def __init__(self, 
                  min_green_bars: int = 2, 
-                 price_increase_pct: float = 1.0, 
+                 price_increase_pct: float = 0.1, 
                  volume_factor: float = 2.0, 
                  ema_period: int = 9,
                  pullback_retracement: float = 0.5):
