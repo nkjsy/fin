@@ -1,13 +1,12 @@
 import pandas as pd
 import pandas_ta as ta
-from datetime import time as dt_time
 from .base import BaseStrategy
 
 class BullFlagStrategy(BaseStrategy):
     """
     A strategy of day trading, based on 1m or 5m charts.
     The entry conditions are:
-    1. The price increases for at least 2 green bars by a certain percentage. At the same time, the volumes are no less than between 9:30 - 9:40. The input dataframe is guaranteed only 1 day data.
+    1. The price increases for at least 2 green bars by a certain percentage. The input dataframe is guaranteed only 1 day data.
     2. Once a red bar follows the green bars, the price should not drop below the 50% of the previous high, and the price should not drop below the 9 period EMA, and the volume should be less than those in the green bars.
     Look for the first bar which has a higher high price than its previous bar's high price. This price is the entry price.
     
@@ -46,19 +45,6 @@ class BullFlagStrategy(BaseStrategy):
         # pandas-ta might return None if not enough data
         ema_result = ta.ema(df['Close'], length=self.ema_period)
         df['EMA'] = ema_result
-        
-        # Get Baseline Volume from 9:30-9:40 (first 10 minutes of trading day)
-        # The input dataframe is guaranteed to contain only 1 day of data
-        baseline_volume = 0.0
-        if isinstance(df.index, pd.DatetimeIndex) and len(df) > 0:
-            # Filter bars between 9:30 and 9:40
-            times = df.index.time
-            start_time = dt_time(9, 30)
-            end_time = dt_time(9, 40)
-            baseline_mask = (times >= start_time) & (times < end_time)
-            baseline_bars = df.loc[baseline_mask, 'Volume']
-            if len(baseline_bars) > 0:
-                baseline_volume = baseline_bars.mean()
         
         # Initialize columns
         df['Signal'] = 0
@@ -128,10 +114,6 @@ class BullFlagStrategy(BaseStrategy):
             prev_high = highs[i-1]
             prev_close = closes[i-1]
             
-            # Volume Condition: Current Vol > Baseline Vol (from 9:30-9:40)
-            # If Baseline Vol is 0 (missing data), condition fails
-            vol_cond = (curr_vol >= baseline_volume) if baseline_volume > 0 else False
-            
             if state == 'SCANNING':
                 if is_green:
                     if green_seq_count == 0:
@@ -144,11 +126,7 @@ class BullFlagStrategy(BaseStrategy):
                         green_seq_low = min(green_seq_low, curr_low)
                         green_seq_vol_sum += curr_vol
                     
-                    if vol_cond:
-                        green_seq_count += 1
-                    else:
-                        # Volume condition failed
-                        green_seq_count = 0
+                    green_seq_count += 1
                         
                 elif is_red:
                     # Potential transition to PULLBACK
@@ -206,8 +184,8 @@ class BullFlagStrategy(BaseStrategy):
                         # Failed
                         state = 'SCANNING'
                         green_seq_count = 0
-                        # If this bar is Green and meets volume, start new sequence.
-                        if is_green and vol_cond:
+                        # If this bar is Green, start new sequence.
+                        if is_green:
                              green_seq_count = 1
                              green_seq_start_price = curr_open
                              green_seq_low = curr_low
