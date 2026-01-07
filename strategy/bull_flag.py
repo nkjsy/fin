@@ -46,7 +46,8 @@ class BullFlagStrategy(BaseStrategy):
 
         # Calculate EMA
         # pandas-ta might return None if not enough data
-        df['EMA'] = df.ta.ema(length=self.ema_period)
+        ema_result = ta.ema(df['Close'], length=self.ema_period)
+        df['EMA'] = ema_result
         
         # Get Previous Day Volume
         # We attempt to shift the data by 1 day to align timestamps.
