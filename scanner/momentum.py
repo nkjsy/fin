@@ -4,6 +4,7 @@ from data_manager import DataManager
 from utils import get_next_day
 import pandas as pd
 import datetime
+from tqdm import tqdm
 
 class MomentumScanner(BaseScanner):
     def scan(self, current_date: str = None, min_price: float = 0, max_price: float = 0, max_float: int = 0) -> list:
@@ -30,8 +31,8 @@ class MomentumScanner(BaseScanner):
         provider = YFinanceProvider()
         data_manager = DataManager(DATA_DIR, provider)
         final_tickers = []
-        for ticker in filtered_df["Ticker"].tolist():
-            print(f"Scanning {ticker}...")
+        for ticker in tqdm(filtered_df["Ticker"]):
+            # print(f"Scanning {ticker}...")
             success = data_manager.download_data(ticker, interval=TIMEFRAME, end_date=next_date, period=PERIOD)
             if not success:
                 print(f"Failed to download data for {ticker}. Drop it.")

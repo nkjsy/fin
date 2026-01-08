@@ -139,7 +139,7 @@ def main():
     tickers = scanner.scan(current_date=CURRENT_DATE, min_price=MIN_PRICE, max_price=MAX_PRICE, max_float=MAX_FLOAT)
     
     if not tickers:
-        print("No stocks found matching criteria. Please update data or change criteria.")
+        print("No stocks found matching scanner. Please update data or change scanner.")
         return
 
     print(f"Scanner found {len(tickers)} stocks: {tickers}")

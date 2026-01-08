@@ -45,7 +45,7 @@ class DataManager:
         Downloads and saves data for a single ticker. Returns True if successful.
         If end_date is provided, data is fetched up to that date (exclusive).
         """
-        print(f"Downloading data for {ticker}...")
+        # print(f"Downloading data for {ticker}...")
         df = self.provider.get_history(ticker, interval, period, end_date=end_date)
         if not df.empty:
             self.save_data(ticker, interval, df)
