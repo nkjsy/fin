@@ -14,15 +14,18 @@ class BacktestEngine:
         trade_log = []
         equity_curve = []
         
-        # Ensure Date is available for logging
-        if "Date" not in df.columns:
-            df["Date"] = df.index
+        # Detect datetime column name (yfinance uses 'Datetime' for intraday, 'Date' for daily)
+        date_col = "Datetime" if "Datetime" in df.columns else "Date"
+        
+        # Ensure datetime column is available for logging
+        if date_col not in df.columns:
+            df[date_col] = df.index
         
         for i in range(len(df)):
             row = df.iloc[i]
             close_price = row["Close"]
             signal = row["Signal"]
-            date = row["Date"]
+            datetime_val = row[date_col]
             entry_price = row.get("Entry_Price", 0.0)
             exit_price = row.get("Exit_Price", 0.0)
             
@@ -37,7 +40,7 @@ class BacktestEngine:
                     cash -= cost
                     position += shares_to_buy
                     trade_log.append({
-                        "Date": date,
+                        "Datetime": datetime_val,
                         "Action": "BUY",
                         "Price": buy_price,
                         "Shares": shares_to_buy,
@@ -50,7 +53,7 @@ class BacktestEngine:
                 revenue = position * sell_price
                 cash += revenue
                 trade_log.append({
-                    "Date": date,
+                    "Datetime": datetime_val,
                     "Action": "SELL",
                     "Price": sell_price,
                     "Shares": position,
