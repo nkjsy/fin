@@ -31,7 +31,7 @@ def ensure_universe_data(data_manager, interval, current_date):
     
     if not os.path.exists(summary_path):
         print(f"Updating universe summary on {current_date}...")
-        tickers = get_us_stocks(500)
+        tickers = get_us_stocks(1000)
         data_manager.update_universe(tickers, interval, current_date=current_date)
 
 def main():

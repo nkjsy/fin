@@ -18,7 +18,7 @@ class BullFlagStrategy(BaseStrategy):
     """
     def __init__(self, 
                  min_green_bars: int = 2, 
-                 price_increase_pct: float = 1, 
+                 price_increase_pct: float = 3, 
                  ema_period: int = 9,
                  pullback_retracement: float = 0.5):
         """
@@ -114,6 +114,14 @@ class BullFlagStrategy(BaseStrategy):
             prev_high = highs[i-1]
             prev_close = closes[i-1]
             
+            # Check for new day to reset state
+            # Assuming 'Datetime' is in the index or available. 
+            # If using integer index, we might need a stored date variable.
+            # Example using index if it is a DatetimeIndex:
+            if df.index[i].date() != df.index[i-1].date():
+                state = 'SCANNING'
+                green_seq_count = 0
+                
             if state == 'SCANNING':
                 if is_green:
                     if green_seq_count == 0:
@@ -176,9 +184,9 @@ class BullFlagStrategy(BaseStrategy):
                     green_seq_count = 0
                 else:
                     # Check validity
-                    cond_retracement = curr_low >= pb_limit_price
-                    cond_ema = curr_low >= curr_ema if not pd.isna(curr_ema) else False
-                    cond_vol = curr_vol < pb_avg_green_vol
+                    cond_retracement = curr_close >= pb_limit_price
+                    cond_ema = curr_low >= curr_ema if not pd.isna(curr_ema) else True
+                    cond_vol = curr_vol <= pb_avg_green_vol
                     
                     if not (cond_retracement and cond_ema and cond_vol):
                         # Failed
