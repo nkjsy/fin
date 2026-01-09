@@ -15,7 +15,7 @@ INITIAL_CAPITAL = 10000.0
 MIN_PRICE = 2
 MAX_PRICE = 50
 MAX_FLOAT = 100000000  # 100 million shares
-CURRENT_DATE = "2026-01-06" # Set to "YYYY-MM-DD" to simulate a specific trading day
+CURRENT_DATE = "2026-01-07" # Set to "YYYY-MM-DD" to simulate a specific trading day
 
 # Strategy Config
 STRATEGY_TYPE = BullFlagStrategy  
@@ -31,7 +31,7 @@ def ensure_universe_data(data_manager, interval, current_date):
     
     if not os.path.exists(summary_path):
         print(f"Updating universe summary on {current_date}...")
-        tickers = get_us_stocks(1000)
+        tickers = get_us_stocks(2000)
         data_manager.update_universe(tickers, interval, current_date=current_date)
 
 def main():
@@ -74,6 +74,18 @@ def main():
         
         if df.empty:
             print(f"Data empty for {ticker}. Skipping...")
+            continue
+
+        # Filter data to only CURRENT_DATE to avoid trades on other days
+        date_col = "Datetime" if "Datetime" in df.columns else "Date"
+        if date_col in df.columns:
+            if not pd.api.types.is_datetime64_any_dtype(df[date_col]):
+                df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            trading_dt = pd.to_datetime(CURRENT_DATE)
+            df = df[df[date_col].dt.date == trading_dt.date()]
+        
+        if df.empty:
+            print(f"No data for {ticker} on {CURRENT_DATE}. Skipping...")
             continue
 
         # Run Strategy

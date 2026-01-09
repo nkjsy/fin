@@ -88,7 +88,7 @@ class BullFlagStrategy(BaseStrategy):
         entry_prices = [0.0] * len(df)
         stop_losses = [0.0] * len(df)
         exit_prices = [0.0] * len(df)
-        
+
         # Get numpy arrays for speed
         opens = df['Open'].values
         closes = df['Close'].values
@@ -113,14 +113,6 @@ class BullFlagStrategy(BaseStrategy):
             # Previous bar data
             prev_high = highs[i-1]
             prev_close = closes[i-1]
-            
-            # Check for new day to reset state
-            # Assuming 'Datetime' is in the index or available. 
-            # If using integer index, we might need a stored date variable.
-            # Example using index if it is a DatetimeIndex:
-            if df.index[i].date() != df.index[i-1].date():
-                state = 'SCANNING'
-                green_seq_count = 0
                 
             if state == 'SCANNING':
                 if is_green:
