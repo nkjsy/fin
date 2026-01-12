@@ -100,6 +100,15 @@ class BullFlagStrategy(BaseStrategy):
         is_greens = df['is_green'].values
         is_reds = df['is_red'].values
         
+        # Initialize with first bar data (index 0)
+        if len(df) > 0 and is_greens[0]:
+            green_seq_count = 1
+            green_seq_start_price = opens[0]
+            green_seq_high = highs[0]
+            green_seq_low = lows[0]
+            green_seq_vol_sum = volumes[0]
+            states[0] = 'SCANNING'
+        
         for i in range(1, len(df)):
             # Current bar data
             curr_open = opens[i]
