@@ -8,7 +8,7 @@ from plotting import plot_performance
 
 # --- CONFIGURATION ---
 DATA_DIR = "data"
-TICKER = "OTH"  # Single ticker to debug
+TICKER = "HUYA"  # Single ticker to debug
 TIMEFRAME = "minute5"
 INITIAL_CAPITAL = 10000.0
 CURRENT_DATE = "2026-01-08"  # Set to "YYYY-MM-DD" to simulate a specific trading day

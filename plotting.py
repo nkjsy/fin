@@ -59,6 +59,16 @@ def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_pre
         name="OHLC"
     ), secondary_y=False)
 
+    # EMA Line (if available)
+    if 'EMA' in df_plot.columns:
+        fig.add_trace(go.Scatter(
+            x=df_plot[date_col],
+            y=df_plot["EMA"],
+            mode='lines',
+            line=dict(color='purple', width=1.5),
+            name="EMA"
+        ), secondary_y=False)
+
     # Buy/Sell Markers
     if not trades.empty:
         trades_plot = trades.copy()

@@ -147,8 +147,8 @@ class BullFlagStrategy(BaseStrategy):
                             
                             # Check conditions
                             cond_retracement = curr_low >= pb_limit_price
-                            cond_ema = curr_low >= curr_ema if not pd.isna(curr_ema) else False
-                            cond_vol = curr_vol < pb_avg_green_vol
+                            cond_ema = curr_low >= curr_ema if not pd.isna(curr_ema) else True
+                            cond_vol = curr_vol <= pb_avg_green_vol
                             
                             if cond_retracement and cond_ema and cond_vol:
                                 state = 'PULLBACK'
