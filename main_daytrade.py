@@ -15,7 +15,7 @@ INITIAL_CAPITAL = 10000.0
 MIN_PRICE = 2
 MAX_PRICE = 50
 MAX_FLOAT = 100000000  # 100 million shares
-CURRENT_DATE = "2026-01-07" # Set to "YYYY-MM-DD" to simulate a specific trading day
+CURRENT_DATE = "2026-01-08" # Set to "YYYY-MM-DD" to simulate a specific trading day
 
 # Strategy Config
 STRATEGY_TYPE = BullFlagStrategy  
@@ -31,7 +31,7 @@ def ensure_universe_data(data_manager, interval, current_date):
     
     if not os.path.exists(summary_path):
         print(f"Updating universe summary on {current_date}...")
-        tickers = get_us_stocks(2000)
+        tickers = get_us_stocks()
         data_manager.update_universe(tickers, interval, current_date=current_date)
 
 def main():
