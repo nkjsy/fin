@@ -88,6 +88,7 @@ class BullFlagStrategy(BaseStrategy):
         entry_prices = [0.0] * len(df)
         stop_losses = [0.0] * len(df)
         exit_prices = [0.0] * len(df)
+        states = ['SCANNING'] * len(df)  # Track state for each candle
 
         # Get numpy arrays for speed
         opens = df['Open'].values
@@ -127,6 +128,7 @@ class BullFlagStrategy(BaseStrategy):
                         green_seq_vol_sum += curr_vol
                     
                     green_seq_count += 1
+                    states[i] = 'SCANNING'
                         
                 elif is_red:
                     # Potential transition to PULLBACK
@@ -150,17 +152,22 @@ class BullFlagStrategy(BaseStrategy):
                             
                             if cond_retracement and cond_ema and cond_vol:
                                 state = 'PULLBACK'
+                                states[i] = 'PULLBACK'
                                 pb_min_low = curr_low # Initialize with this red bar's low
                                 # We do not check for entry on the first red bar of the pullback.
                             else:
                                 # Failed pullback conditions
+                                states[i] = 'SCANNING'
                                 green_seq_count = 0
                         else:
+                            states[i] = 'SCANNING'
                             green_seq_count = 0
                     else:
+                        states[i] = 'SCANNING'
                         green_seq_count = 0
                 else:
                     # Doji/Flat
+                    states[i] = 'SCANNING'
                     green_seq_count = 0
             
             elif state == 'PULLBACK':                
@@ -173,6 +180,7 @@ class BullFlagStrategy(BaseStrategy):
                     pos_entry_price = prev_high
                     pos_stop_loss = pb_min_low
                     state = 'IN_POSITION'
+                    states[i] = 'IN_POSITION'
                     green_seq_count = 0
                 else:
                     # Check validity
@@ -183,6 +191,7 @@ class BullFlagStrategy(BaseStrategy):
                     if not (cond_retracement and cond_ema and cond_vol):
                         # Failed
                         state = 'SCANNING'
+                        states[i] = 'SCANNING'
                         green_seq_count = 0
                         # If this bar is Green, start new sequence.
                         if is_green:
@@ -193,6 +202,7 @@ class BullFlagStrategy(BaseStrategy):
                              green_seq_vol_sum = curr_vol
                     else:
                         # Validity check passed, continue PULLBACK
+                        states[i] = 'PULLBACK'
                         pb_min_low = min(pb_min_low, curr_low)
             
             elif state == 'IN_POSITION':
@@ -201,21 +211,24 @@ class BullFlagStrategy(BaseStrategy):
                     signals[i] = -1
                     exit_prices[i] = pos_stop_loss
                     state = 'SCANNING'
+                    states[i] = 'SCANNING'
                     green_seq_count = 0
                 # Check Take Profit (First Red Bar Close)
                 elif is_red:
                     signals[i] = -1
                     exit_prices[i] = curr_close
                     state = 'SCANNING'
+                    states[i] = 'SCANNING'
                     green_seq_count = 0
                 else:
-                # continue in position
-                    pass
+                    # continue in position
+                    states[i] = 'IN_POSITION'
 
         df['Signal'] = signals
         df['Entry_Price'] = entry_prices
         df['Stop_Loss'] = stop_losses
         df['Exit_Price'] = exit_prices
+        df['State'] = states
         
         return df
 

@@ -2,8 +2,15 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# State colors for chart visualization (3 states only)
+STATE_COLORS = {
+    'SCANNING': 'gray',
+    'PULLBACK': 'orange',
+    'IN_POSITION': 'blue',
+}
 
-def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_prefix="", trading_date=None):
+
+def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_prefix="", trading_date=None, show_states=False):
     """
     Plot candlestick chart with volume overlay and buy/sell markers.
     
@@ -15,6 +22,7 @@ def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_pre
         strategy_name: Strategy name for title
         title_prefix: Optional prefix for title (e.g., "BEST:", "WORST:")
         trading_date: Optional date string to filter data to a specific trading day
+        show_states: If True and 'State' column exists, show state arrows above candles
     """
     # Make a copy to avoid modifying original
     df_plot = df_res.copy()
@@ -38,7 +46,7 @@ def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_pre
         print(f"No data for {ticker} on {trading_date}")
         return
 
-    # Create figure with secondary y-axis for volume overlay
+    # Create figure with secondary y-axis for volume
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     # Candlestick (Primary Y)
@@ -100,6 +108,32 @@ def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_pre
         name="Volume", 
         opacity=0.3
     ), secondary_y=True)
+
+    # State visualization as tiny colored arrows above candles
+    if show_states and 'State' in df_plot.columns:
+        # Calculate offset above candles
+        price_range = df_plot['High'].max() - df_plot['Low'].min()
+        arrow_offset = price_range * 0.02  # 2% above the high
+        
+        # Add arrows for each state (grouped by state for legend)
+        for state_name, color in STATE_COLORS.items():
+            state_mask = df_plot['State'] == state_name
+            state_data = df_plot[state_mask]
+            
+            if not state_data.empty:
+                fig.add_trace(go.Scatter(
+                    x=state_data[date_col],
+                    y=state_data['High'] + arrow_offset,
+                    mode='markers',
+                    marker=dict(
+                        symbol='triangle-down',
+                        size=6,
+                        color=color
+                    ),
+                    name=state_name,
+                    hovertemplate=f'{state_name}<extra></extra>',
+                    showlegend=True
+                ), secondary_y=False)
 
     # Layout Updates
     fig.update_layout(

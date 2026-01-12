@@ -8,7 +8,7 @@ from plotting import plot_performance
 
 # --- CONFIGURATION ---
 DATA_DIR = "data"
-TICKER = "HUYA"  # Single ticker to debug
+TICKER = "OTH"  # Single ticker to debug
 TIMEFRAME = "minute5"
 INITIAL_CAPITAL = 10000.0
 CURRENT_DATE = "2026-01-08"  # Set to "YYYY-MM-DD" to simulate a specific trading day
@@ -75,9 +75,9 @@ def main():
     else:
         print("\nNo trades executed.")
 
-    # Plotting
+    # Plotting with state visualization
     print("\nRendering chart...")
-    plot_performance(TICKER, df_res, trades, TIMEFRAME, STRATEGY_TYPE.__name__, title_prefix="DEBUG:", trading_date=CURRENT_DATE)
+    plot_performance(TICKER, df_res, trades, TIMEFRAME, STRATEGY_TYPE.__name__, title_prefix="DEBUG:", trading_date=CURRENT_DATE, show_states=True)
 
 if __name__ == "__main__":
     main()
