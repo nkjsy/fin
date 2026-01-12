@@ -6,3 +6,4 @@ fastparquet
 lxml
 openpyxl
 requests
+schwab-py
