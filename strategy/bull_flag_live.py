@@ -9,8 +9,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional, List
 from enum import Enum
+from zoneinfo import ZoneInfo
 import pandas as pd
 import pandas_ta as ta
+
+
+# Eastern timezone for market hours
+ET = ZoneInfo("America/New_York")
 
 
 class StrategyState(Enum):
@@ -141,8 +146,8 @@ class BullFlagLiveStrategy:
         self.prev_candle: Optional[Candle] = None
     
     def _log(self, message: str):
-        """Log with timestamp and symbol."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        """Log with timestamp and symbol (Eastern time)."""
+        timestamp = datetime.now(ET).strftime("%H:%M:%S")
         print(f"[{timestamp}] [{self.symbol}] {message}")
     
     def _calculate_ema(self) -> Optional[float]:
@@ -160,7 +165,7 @@ class BullFlagLiveStrategy:
     def _emit_signal(self, action: str, price: float, stop_loss: float = None, reason: str = "") -> Signal:
         """Emit a trading signal."""
         signal = Signal(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(ET),
             symbol=self.symbol,
             action=action,
             price=price,

@@ -14,6 +14,8 @@ import argparse
 import asyncio
 from datetime import datetime, time as dt_time
 import sys
+from zoneinfo import ZoneInfo
+import time
 
 from schwab.auth import easy_client
 
@@ -62,19 +64,20 @@ def parse_args():
 
 def wait_for_market_open():
     """Wait until market is open (9:30 AM ET)."""
+    ET = ZoneInfo("America/New_York")
     market_open = dt_time(9, 30)
-    now = datetime.now().time()
+    now = datetime.now(ET).time()
     
     if now >= market_open:
         print("Market is already open")
         return
     
-    print(f"Waiting for market open at 9:30 AM...")
+    print(f"Waiting for market open at 9:30 AM ET...")
     
-    while datetime.now().time() < market_open:
-        remaining = datetime.combine(
-            datetime.today(), market_open
-        ) - datetime.now()
+    while datetime.now(ET).time() < market_open:
+        now_et = datetime.now(ET)
+        target = datetime.combine(now_et.date(), market_open, tzinfo=ET)
+        remaining = target - now_et
         
         minutes = remaining.seconds // 60
         if minutes > 0:
@@ -83,7 +86,6 @@ def wait_for_market_open():
         # Sleep in intervals
         sleep_time = min(60, remaining.seconds)
         if sleep_time > 0:
-            import time
             time.sleep(sleep_time)
     
     print("Market is open!")

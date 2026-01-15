@@ -8,10 +8,15 @@ and tracks positions/P&L in memory without executing real trades.
 from datetime import datetime
 from typing import Dict, List, Optional
 import uuid
+from zoneinfo import ZoneInfo
 
 from broker.interfaces import (
     IBroker, Order, Position, OrderType, OrderSide, OrderStatus
 )
+
+
+# Eastern timezone for market hours
+ET = ZoneInfo("America/New_York")
 
 
 class PaperBroker(IBroker):
@@ -39,8 +44,8 @@ class PaperBroker(IBroker):
         self._log(f"PaperBroker initialized with ${initial_cash:,.2f}")
     
     def _log(self, message: str):
-        """Log a message with timestamp."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        """Log a message with timestamp (Eastern time)."""
+        timestamp = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S")
         print(f"[PAPER] {timestamp} | {message}")
     
     def _generate_order_id(self) -> str:
@@ -63,7 +68,7 @@ class PaperBroker(IBroker):
         For limit/stop orders, order is tracked but not automatically filled.
         """
         order_id = self._generate_order_id()
-        timestamp = datetime.now().isoformat()
+        timestamp = datetime.now(ET).isoformat()
         
         order = Order(
             order_id=order_id,
@@ -127,7 +132,7 @@ class PaperBroker(IBroker):
         
         # Record trade
         self.trade_log.append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(ET).isoformat(),
             "order_id": order_id,
             "symbol": order.symbol,
             "side": order.side.value,

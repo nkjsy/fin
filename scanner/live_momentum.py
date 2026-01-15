@@ -8,6 +8,7 @@ Confirms volume 9:30-9:40 against previous day.
 import time
 from datetime import datetime, timedelta
 import pandas as pd
+from zoneinfo import ZoneInfo
 
 from scanner.base import BaseScanner
 from providers.schwab_lib import SchwabProvider
@@ -86,21 +87,20 @@ class LiveMomentumScanner(BaseScanner):
     
     def _wait_until_940(self):
         """Wait until 9:40 AM ET."""
-        # Note: This is a simple implementation. In production, you'd want
-        # proper timezone handling with pytz or zoneinfo.
-        target_time = datetime.now().replace(hour=9, minute=40, second=0, microsecond=0)
-        now = datetime.now()
+        ET = ZoneInfo("America/New_York")
+        now = datetime.now(ET)
+        target_time = now.replace(hour=9, minute=40, second=0, microsecond=0)
         
         if now >= target_time:
-            print("Already past 9:40 AM, proceeding with volume check...")
+            print("Already past 9:40 AM ET, proceeding with volume check...")
             return
         
         wait_seconds = (target_time - now).total_seconds()
-        print(f"Waiting until 9:40 AM ({wait_seconds:.0f} seconds)...")
+        print(f"Waiting until 9:40 AM ET ({wait_seconds:.0f} seconds)...")
         
         # Wait with progress updates
-        while datetime.now() < target_time:
-            remaining = (target_time - datetime.now()).total_seconds()
+        while datetime.now(ET) < target_time:
+            remaining = (target_time - datetime.now(ET)).total_seconds()
             if remaining > 60:
                 print(f"  {remaining/60:.1f} minutes remaining...")
                 time.sleep(30)

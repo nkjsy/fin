@@ -8,6 +8,7 @@ Executes real orders through Charles Schwab.
 from datetime import datetime
 from typing import Dict, List, Optional
 import httpx
+from zoneinfo import ZoneInfo
 
 from schwab.client import Client
 from schwab.orders.equities import (
@@ -20,6 +21,10 @@ from broker.interfaces import (
     IBroker, Order, Position, OrderType, OrderSide, OrderStatus
 )
 import config
+
+
+# Eastern timezone for market hours
+ET = ZoneInfo("America/New_York")
 
 
 class SchwabBroker(IBroker):
@@ -64,8 +69,8 @@ class SchwabBroker(IBroker):
         return accounts[0]["hashValue"]
     
     def _log(self, message: str):
-        """Log a message with timestamp."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        """Log a message with timestamp (Eastern time)."""
+        timestamp = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S")
         print(f"[SCHWAB] {timestamp} | {message}")
     
     def place_order(

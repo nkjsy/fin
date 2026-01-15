@@ -8,6 +8,7 @@ real-time prices when strategies are in PULLBACK or IN_POSITION state.
 import time
 from datetime import datetime, time as dt_time
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from schwab.client import Client
 
@@ -28,6 +29,9 @@ class LiveTradingEngine:
     # Polling intervals (seconds)
     CANDLE_POLL_INTERVAL = 300  # 5 minutes
     REALTIME_POLL_INTERVAL = 3  # 3 seconds for breakout/stop checks
+    
+    # Eastern timezone for market hours
+    ET = ZoneInfo("America/New_York")
     
     def __init__(
         self,
@@ -61,8 +65,8 @@ class LiveTradingEngine:
         self._log(f"Engine initialized for {len(symbols)} symbols")
     
     def _log(self, message: str):
-        """Log with timestamp."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        """Log with timestamp (Eastern time)."""
+        timestamp = datetime.now(self.ET).strftime("%H:%M:%S")
         print(f"[{timestamp}] [ENGINE] {message}")
     
     def _handle_signal(self, signal: Signal):
@@ -251,15 +255,15 @@ class LiveTradingEngine:
         
         try:
             while self.running:
-                now = datetime.now()
+                now_et = datetime.now(self.ET)
                 
                 # Check if market is closed (4:00 PM ET)
-                if now.time() >= dt_time(16, 0):
+                if now_et.time() >= dt_time(16, 0):
                     self._log("Market closed - stopping engine")
                     break
                 
                 # Poll candles at each 5-minute boundary (e.g., :00, :05, :10...)
-                current_5min_slot = now.minute // 5
+                current_5min_slot = now_et.minute // 5
                 if current_5min_slot != last_candle_minute:
                     self._process_candles()
                     last_candle_minute = current_5min_slot
@@ -270,7 +274,7 @@ class LiveTradingEngine:
                     time.sleep(self.REALTIME_POLL_INTERVAL)
                 else:
                     # Sleep until next 5-minute boundary
-                    seconds_into_slot = now.minute % 5 * 60 + now.second
+                    seconds_into_slot = now_et.minute % 5 * 60 + now_et.second
                     sleep_time = self.CANDLE_POLL_INTERVAL - seconds_into_slot + 5  # +5s buffer for candle to be ready
                     time.sleep(max(1, sleep_time))
                     
