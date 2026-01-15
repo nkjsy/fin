@@ -1,6 +1,10 @@
 # Data
 data/
 
+# Credentials
+config.py
+schwab_token.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -68,7 +68,7 @@ class MomentumScanner(BaseScanner):
                 
             prev_date = available_dates[target_idx - 1]
             
-            # filter 1: relative volume: volume 9:30-9:40 is 2x volume at the same time yesterday
+            # filter 1: relative volume: volume 9:30-9:40 is 5x volume at the same time yesterday
             start_time = datetime.time(9, 30)
             end_time = datetime.time(9, 40)
             
