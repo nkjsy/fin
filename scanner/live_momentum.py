@@ -8,10 +8,13 @@ Confirms volume 9:30-9:40 against previous day.
 import time
 from datetime import datetime, timedelta
 import pandas as pd
+import httpx
 from zoneinfo import ZoneInfo
-
+from datetime import time as dt_time
 from scanner.base import BaseScanner
 from providers.schwab_lib import SchwabProvider
+from schwab.client import Client
+from utils import wait_until_time
 
 
 class LiveMomentumScanner(BaseScanner):
@@ -19,10 +22,11 @@ class LiveMomentumScanner(BaseScanner):
     Live scanner that uses Schwab's market movers API and confirms with volume.
     
     Workflow:
-    1. At 9:30, fetch top 10 up movers from NASDAQ
-    2. Wait until 9:40 to collect volume data
-    3. Confirm each mover has 5x relative volume vs previous day's same time window
-    4. Return confirmed tickers
+    1. At 9:30, fetch top 10 up movers from all indices (NASDAQ, NYSE, $DJI, $COMPX, $SPX)
+    2. Apply initial filters (price range, float shares)
+    3. Wait until 9:40 to collect volume data
+    4. Confirm each mover has 5x relative volume vs previous day's same time window
+    5. Return confirmed tickers
     """
     
     def __init__(self, provider: SchwabProvider, data_dir: str = "data"):
@@ -36,42 +40,58 @@ class LiveMomentumScanner(BaseScanner):
         super().__init__(data_dir)
         self.provider = provider
         self.relative_volume_threshold = 5.0  # 5x previous day volume
+        # All available indices
+        self.indices = ["NASDAQ", "NYSE", "$DJI", "$COMPX", "$SPX"]
     
-    def scan(self, wait_for_volume: bool = True, **kwargs) -> list:
+    def scan(self, wait_for_volume: bool = True, min_price: float = 0, max_price: float = float('inf'), max_float: int = float('inf'), **kwargs) -> list:
         """
         Scan for top movers with volume confirmation.
         
         Args:
             wait_for_volume: If True, waits until 9:40 ET for volume confirmation.
                            If False, returns movers immediately (for testing).
+            min_price: Minimum price filter (default: 0)
+            max_price: Maximum price filter (default: inf)
+            max_float: Maximum float shares filter (default: inf)
             
         Returns:
             List of confirmed ticker symbols
         """
         print("--- Live Momentum Scanner ---")
         
-        # Step 1: Get top 10 up movers
-        print("Fetching top 10 NASDAQ up movers...")
-        movers = self.provider.get_movers(index="NASDAQ", direction="up", count=10)
+        # Step 1: Get top 10 up movers from all indices
+        print("Fetching top 10 up movers from all indices...")
+        movers = self._get_movers_from_all_indices()
         
         if not movers:
             print("No movers found.")
             return []
         
         symbols = [m["symbol"] for m in movers]
-        print(f"Top movers: {symbols}")
+        print(f"Top movers from all indices: {symbols}")
         
         for m in movers:
             print(f"  {m['symbol']}: ${m['lastPrice']:.2f} ({m['netPercentChange']:+.2f}%)")
+        
+        # Step 2: Apply initial filters (price range, float shares)
+        print(f"\nApplying initial filters (price: ${min_price}-${max_price}, max float: {max_float:,})...")
+        filtered_movers = self._apply_initial_filters(movers, min_price, max_price, max_float)
+        
+        if not filtered_movers:
+            print("No movers passed initial filters.")
+            return []
+        
+        symbols = [m["symbol"] for m in filtered_movers]
+        print(f"Movers after filtering: {symbols}")
         
         if not wait_for_volume:
             # Skip volume confirmation (for testing)
             return symbols
         
-        # Step 2: Wait until 9:40 ET for volume data
-        self._wait_until_940()
+        # Step 3: Wait until 9:40 ET for volume data
+        wait_until_time(9, 40, "checking volume")
         
-        # Step 3: Confirm volume for each mover
+        # Step 4: Confirm volume for each mover
         print("\nConfirming volume (5x threshold)...")
         confirmed = []
         
@@ -85,29 +105,120 @@ class LiveMomentumScanner(BaseScanner):
         print(f"\nConfirmed {len(confirmed)} tickers: {confirmed}")
         return confirmed
     
-    def _wait_until_940(self):
-        """Wait until 9:40 AM ET."""
-        ET = ZoneInfo("America/New_York")
-        now = datetime.now(ET)
-        target_time = now.replace(hour=9, minute=40, second=0, microsecond=0)
+    def _get_movers_from_all_indices(self) -> list:
+        """
+        Fetch top 10 movers from each index and combine them.
         
-        if now >= target_time:
-            print("Already past 9:40 AM ET, proceeding with volume check...")
-            return
+        Returns:
+            List of unique movers sorted by percent change
+        """
+        all_movers = []
+        seen_symbols = set()
         
-        wait_seconds = (target_time - now).total_seconds()
-        print(f"Waiting until 9:40 AM ET ({wait_seconds:.0f} seconds)...")
+        for index in self.indices:
+            try:
+                movers = self.provider.get_movers(index=index, direction="up", count=10)
+                for m in movers:
+                    symbol = m["symbol"]
+                    if symbol not in seen_symbols:
+                        seen_symbols.add(symbol)
+                        m["source_index"] = index
+                        all_movers.append(m)
+                print(f"  {index}: found {len(movers)} movers")
+            except Exception as e:
+                print(f"  {index}: error fetching movers - {e}")
         
-        # Wait with progress updates
-        while datetime.now(ET) < target_time:
-            remaining = (target_time - datetime.now(ET)).total_seconds()
-            if remaining > 60:
-                print(f"  {remaining/60:.1f} minutes remaining...")
-                time.sleep(30)
+        # Sort by percent change descending
+        all_movers.sort(key=lambda x: x.get("netPercentChange", 0), reverse=True)
+        
+        print(f"Combined {len(all_movers)} unique movers from all indices")
+        return all_movers
+    
+    def _apply_initial_filters(self, movers: list, min_price: float, max_price: float, max_float: int) -> list:
+        """
+        Apply price range and float shares filters to movers.
+        
+        Args:
+            movers: List of mover dicts
+            min_price: Minimum price
+            max_price: Maximum price
+            max_float: Maximum float shares
+            
+        Returns:
+            Filtered list of movers
+        """
+        filtered = []
+        
+        # Get all symbols for batch fundamentals lookup
+        symbols = [m["symbol"] for m in movers]
+        fundamentals = self._get_fundamentals(symbols) if max_float < float('inf') else {}
+        
+        for m in movers:
+            symbol = m["symbol"]
+            price = m.get("lastPrice", 0)
+            
+            # Check price range first (we already have price from movers data)
+            if price < min_price or price > max_price:
+                print(f"  ✗ {symbol}: price ${price:.2f} outside range ${min_price}-${max_price}")
+                continue
+            
+            # Check float shares if max_float filter is applied
+            if max_float < float('inf'):
+                float_shares = fundamentals.get(symbol)
+                
+                if float_shares is None:
+                    print(f"  ? {symbol}: no float data available, skipping")
+                    continue
+                
+                if float_shares > max_float:
+                    print(f"  ✗ {symbol}: float {float_shares:,.0f} > max {max_float:,}")
+                    continue
+                
+                print(f"  ✓ {symbol}: price ${price:.2f}, float {float_shares:,.0f}")
             else:
-                time.sleep(5)
+                print(f"  ✓ {symbol}: price ${price:.2f}")
+            
+            filtered.append(m)
         
-        print("9:40 AM reached, checking volume...")
+        return filtered
+    
+    def _get_fundamentals(self, symbols: list) -> dict:
+        """
+        Get fundamental data (float shares) for symbols using Schwab API.
+        
+        Args:
+            symbols: List of ticker symbols
+            
+        Returns:
+            Dict mapping symbol to float shares
+        """
+        result = {}
+        try:
+            resp = self.provider.client.get_instruments(
+                symbols, 
+                Client.Instrument.Projection.FUNDAMENTAL
+            )
+            
+            if resp.status_code != httpx.codes.OK:
+                print(f"    Error fetching fundamentals: {resp.status_code}")
+                return result
+            
+            data = resp.json()
+            
+            # Parse response - structure: {"instruments": [{"symbol": ..., "fundamental": {...}}]}
+            instruments = data.get("instruments", [])
+            for inst in instruments:
+                symbol = inst.get("symbol")
+                fundamental = inst.get("fundamental", {})
+                float_shares = fundamental.get("marketCapFloat")  # Float shares in millions
+                if float_shares is not None:
+                    # Convert from millions to actual shares
+                    result[symbol] = int(float_shares * 1_000_000)
+                    
+        except Exception as e:
+            print(f"    Error fetching fundamentals: {e}")
+        
+        return result
     
     def _confirm_volume(self, symbol: str) -> bool:
         """
@@ -149,7 +260,6 @@ class LiveMomentumScanner(BaseScanner):
             yesterday = dates[-2]
             
             # Filter for 9:30-9:40 window
-            from datetime import time as dt_time
             start_time = dt_time(9, 30)
             end_time = dt_time(9, 40)
             

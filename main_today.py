@@ -22,6 +22,12 @@ from live_engine import LiveTradingEngine
 from utils import wait_for_market_open, create_client
 
 
+# Scanner filter constants
+MIN_PRICE = 2.0
+MAX_PRICE = 50.0
+MAX_FLOAT = 100_000_000  # 100 million shares
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -69,7 +75,12 @@ def run_scanner(provider: SchwabProvider, wait_for_volume: bool = True) -> list:
         List of confirmed ticker symbols
     """
     scanner = LiveMomentumScanner(provider)
-    return scanner.scan(wait_for_volume=wait_for_volume)
+    return scanner.scan(
+        wait_for_volume=wait_for_volume,
+        min_price=MIN_PRICE,
+        max_price=MAX_PRICE,
+        max_float=MAX_FLOAT
+    )
 
 
 async def run_trading_session(client, broker, symbols: list):
@@ -145,6 +156,7 @@ def main():
     else:
         # Run scanner
         print("\n--- Running Live Momentum Scanner ---")
+        print(f"Filters: price ${MIN_PRICE}-${MAX_PRICE}, max float {MAX_FLOAT:,}")
         symbols = run_scanner(provider, wait_for_volume=not args.no_wait)
         
         if not symbols:

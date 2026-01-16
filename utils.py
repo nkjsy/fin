@@ -94,6 +94,44 @@ def wait_for_market_open(client):
     print("Market is open!")
 
 
+def wait_until_time(hour: int, minute: int, description: str = None):
+    """
+    Wait until a specific time in Eastern Time.
+    
+    Args:
+        hour: Target hour (0-23)
+        minute: Target minute (0-59)
+        description: Optional description for logging (e.g., "volume check")
+    
+    Returns:
+        True if waited, False if already past target time
+    """
+    ET = ZoneInfo("America/New_York")
+    now = datetime.now(ET)
+    target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    
+    time_str = f"{hour}:{minute:02d} AM" if hour < 12 else f"{hour-12 if hour > 12 else 12}:{minute:02d} PM"
+    
+    if now >= target_time:
+        print(f"Already past {time_str} ET" + (f", proceeding with {description}..." if description else ""))
+        return False
+    
+    wait_seconds = (target_time - now).total_seconds()
+    print(f"Waiting until {time_str} ET ({wait_seconds:.0f} seconds)...")
+    
+    # Wait with progress updates
+    while datetime.now(ET) < target_time:
+        remaining = (target_time - datetime.now(ET)).total_seconds()
+        if remaining > 60:
+            print(f"  {remaining/60:.1f} minutes remaining...")
+            time.sleep(30)
+        else:
+            time.sleep(5)
+    
+    print(f"{time_str} ET reached" + (f", {description}..." if description else ""))
+    return True
+
+
 def create_client():
     """
     Create authenticated Schwab client.
