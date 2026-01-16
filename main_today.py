@@ -12,19 +12,14 @@ Usage:
 
 import argparse
 import asyncio
-from datetime import datetime, time as dt_time
 import sys
-from zoneinfo import ZoneInfo
-import time
 
-from schwab.auth import easy_client
-
-import config
 from providers.schwab_lib import SchwabProvider
 from scanner.live_momentum import LiveMomentumScanner
 from broker.paper_broker import PaperBroker
 from broker.schwab_broker import SchwabBroker
 from live_engine import LiveTradingEngine
+from utils import wait_for_market_open, create_client
 
 
 def parse_args():
@@ -60,50 +55,6 @@ def parse_args():
         help="Initial cash for paper trading (default: 100000)"
     )
     return parser.parse_args()
-
-
-def wait_for_market_open():
-    """Wait until market is open (9:30 AM ET)."""
-    ET = ZoneInfo("America/New_York")
-    market_open = dt_time(9, 30)
-    now = datetime.now(ET).time()
-    
-    if now >= market_open:
-        print("Market is already open")
-        return
-    
-    print(f"Waiting for market open at 9:30 AM ET...")
-    
-    while datetime.now(ET).time() < market_open:
-        now_et = datetime.now(ET)
-        target = datetime.combine(now_et.date(), market_open, tzinfo=ET)
-        remaining = target - now_et
-        
-        minutes = remaining.seconds // 60
-        if minutes > 0:
-            print(f"  {minutes} minutes until market open...")
-        
-        # Sleep in intervals
-        sleep_time = min(60, remaining.seconds)
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-    
-    print("Market is open!")
-
-
-def create_client():
-    """Create authenticated Schwab client."""
-    print("Authenticating with Schwab...")
-    
-    client = easy_client(
-        api_key=config.SCHWAB_API_KEY,
-        app_secret=config.SCHWAB_APP_SECRET,
-        callback_url=config.SCHWAB_CALLBACK_URL,
-        token_path=config.SCHWAB_TOKEN_PATH
-    )
-    
-    print("Authentication successful")
-    return client
 
 
 def run_scanner(provider: SchwabProvider, wait_for_volume: bool = True) -> list:
@@ -181,6 +132,9 @@ def main():
     else:
         broker = PaperBroker(initial_cash=args.initial_cash)
     
+    # Wait for market open
+    wait_for_market_open(client)
+    
     # Get symbols to trade
     if args.skip_scan:
         if not args.symbols:
@@ -189,9 +143,6 @@ def main():
         symbols = args.symbols
         print(f"Using provided symbols: {symbols}")
     else:
-        # Wait for market open
-        wait_for_market_open()
-        
         # Run scanner
         print("\n--- Running Live Momentum Scanner ---")
         symbols = run_scanner(provider, wait_for_volume=not args.no_wait)

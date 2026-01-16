@@ -1,6 +1,114 @@
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
+import sys
+import time
+from datetime import datetime, timedelta, time as dt_time
+from zoneinfo import ZoneInfo
+from schwab.client import Client
+import httpx
+from schwab.auth import easy_client
+import config
+
+
+def wait_for_market_open(client):
+    """Wait until market is open, using Schwab API for accurate market hours."""
+    
+    ET = ZoneInfo("America/New_York")
+    earliest_start = dt_time(8, 30)
+    now = datetime.now(ET)
+    
+    # Fetch market hours from Schwab API
+    print("Fetching market hours from Schwab...")
+    resp = client.get_market_hours(Client.MarketHours.Market.EQUITY, date=now.date())
+    
+    if resp.status_code != httpx.codes.OK:
+        print(f"⚠️  Failed to get market hours (status {resp.status_code}), using defaults")
+        # Fallback to hardcoded hours
+        market_open = dt_time(9, 30)
+        market_close = dt_time(16, 0)
+    else:
+        data = resp.json()
+        # Parse the response to get market hours
+        # Response structure: {"equity": {"EQ": {...}}} or {"equity": {"equity": {...}}}
+        equity_data = data.get("equity", {})
+        market_info = equity_data.get("EQ") or equity_data.get("equity") or {}
+        
+        if not market_info.get("isOpen", False):
+            # Market is closed (weekend/holiday)
+            print(f"Market is closed today ({now.strftime('%A, %B %d, %Y')})")
+            print("This could be a weekend or market holiday.")
+            sys.exit(0)
+        
+        # Parse session hours (format: "2024-01-15T09:30:00-05:00")
+        session_hours = market_info.get("sessionHours", {})
+        regular_market = session_hours.get("regularMarket", [])
+        
+        if not regular_market:
+            print("Could not find regular market hours in API response")
+            sys.exit(1)
+        
+        # Get start and end times
+        start_str = regular_market[0].get("start")
+        end_str = regular_market[0].get("end")
+        
+        market_open = datetime.fromisoformat(start_str).time()
+        market_close = datetime.fromisoformat(end_str).time()
+        
+        print(f"Market hours today: {market_open.strftime('%H:%M')} - {market_close.strftime('%H:%M')} ET")
+    
+    current_time = now.time()
+    
+    # Check if market is currently open
+    if market_open <= current_time < market_close:
+        print("Market is already open")
+        return
+    
+    # Check if market has closed for today
+    if current_time >= market_close:
+        print(f"Market is closed for today (closed at {market_close.strftime('%H:%M')} ET, current time: {current_time.strftime('%H:%M')} ET)")
+        print("Please run again tomorrow before market close.")
+        sys.exit(0)
+    
+    # Check if it's too early
+    if current_time < earliest_start:
+        print(f"Too early to start (current time: {current_time.strftime('%H:%M')} ET)")
+        print("Please run again after 8:30 AM ET.")
+        sys.exit(0)
+    
+    print(f"Waiting for market open at {market_open.strftime('%H:%M')} ET...")
+    
+    while datetime.now(ET).time() < market_open:
+        now_et = datetime.now(ET)
+        target = datetime.combine(now_et.date(), market_open, tzinfo=ET)
+        remaining = target - now_et
+        
+        minutes = remaining.seconds // 60
+        if minutes > 0:
+            print(f"  {minutes} minutes until market open...")
+        
+        # Sleep in intervals
+        sleep_time = min(60, remaining.seconds)
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+    
+    print("Market is open!")
+
+
+def create_client():
+    """Create authenticated Schwab client."""
+    
+    print("Authenticating with Schwab...")
+    
+    client = easy_client(
+        api_key=config.SCHWAB_API_KEY,
+        app_secret=config.SCHWAB_APP_SECRET,
+        callback_url=config.SCHWAB_CALLBACK_URL,
+        token_path=config.SCHWAB_TOKEN_PATH
+    )
+    
+    print("Authentication successful")
+    return client
+
 
 def get_sp500_tickers():
     try:
