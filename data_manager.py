@@ -75,7 +75,7 @@ class DataManager:
                         "Ticker": ticker,
                         "Price": price,
                         "Volume": volume,
-                        "FloatShares": float_shares
+                        "FloatShares": int(float_shares) if float_shares else None
                     })
             except Exception as e:
                 print(f"Failed to fetch info for {ticker}: {e}")

@@ -2,12 +2,31 @@ import pandas as pd
 import requests
 import sys
 import time
+import yfinance as yf
 from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 from schwab.client import Client
 import httpx
 from schwab.auth import easy_client
 import config
+
+
+def get_float_shares(symbol: str) -> int | None:
+    """
+    Get float shares for a symbol using yfinance.
+    
+    Args:
+        symbol: Ticker symbol
+        
+    Returns:
+        Float shares count, or None if not available
+    """
+    try:
+        info = yf.Ticker(symbol).info
+        float_shares = info.get("floatShares")
+        return int(float_shares) if float_shares is not None else None
+    except Exception:
+        return None
 
 
 def wait_for_market_open(client):

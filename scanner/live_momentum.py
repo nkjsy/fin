@@ -8,13 +8,11 @@ Confirms volume 9:30-9:40 against previous day.
 import time
 from datetime import datetime, timedelta
 import pandas as pd
-import httpx
 from zoneinfo import ZoneInfo
 from datetime import time as dt_time
 from scanner.base import BaseScanner
 from providers.schwab_lib import SchwabProvider
-from schwab.client import Client
-from utils import wait_until_time
+from utils import wait_until_time, get_float_shares
 
 
 class LiveMomentumScanner(BaseScanner):
@@ -149,10 +147,6 @@ class LiveMomentumScanner(BaseScanner):
         """
         filtered = []
         
-        # Get all symbols for batch fundamentals lookup
-        symbols = [m["symbol"] for m in movers]
-        fundamentals = self._get_fundamentals(symbols) if max_float < float('inf') else {}
-        
         for m in movers:
             symbol = m["symbol"]
             price = m.get("lastPrice", 0)
@@ -164,7 +158,7 @@ class LiveMomentumScanner(BaseScanner):
             
             # Check float shares if max_float filter is applied
             if max_float < float('inf'):
-                float_shares = fundamentals.get(symbol)
+                float_shares = get_float_shares(symbol)
                 
                 if float_shares is None:
                     print(f"  ? {symbol}: no float data available, skipping")
@@ -181,44 +175,6 @@ class LiveMomentumScanner(BaseScanner):
             filtered.append(m)
         
         return filtered
-    
-    def _get_fundamentals(self, symbols: list) -> dict:
-        """
-        Get fundamental data (float shares) for symbols using Schwab API.
-        
-        Args:
-            symbols: List of ticker symbols
-            
-        Returns:
-            Dict mapping symbol to float shares
-        """
-        result = {}
-        try:
-            resp = self.provider.client.get_instruments(
-                symbols, 
-                Client.Instrument.Projection.FUNDAMENTAL
-            )
-            
-            if resp.status_code != httpx.codes.OK:
-                print(f"    Error fetching fundamentals: {resp.status_code}")
-                return result
-            
-            data = resp.json()
-            
-            # Parse response - structure: {"instruments": [{"symbol": ..., "fundamental": {...}}]}
-            instruments = data.get("instruments", [])
-            for inst in instruments:
-                symbol = inst.get("symbol")
-                fundamental = inst.get("fundamental", {})
-                float_shares = fundamental.get("marketCapFloat")  # Float shares in millions
-                if float_shares is not None:
-                    # Convert from millions to actual shares
-                    result[symbol] = int(float_shares * 1_000_000)
-                    
-        except Exception as e:
-            print(f"    Error fetching fundamentals: {e}")
-        
-        return result
     
     def _confirm_volume(self, symbol: str) -> bool:
         """
