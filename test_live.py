@@ -12,6 +12,9 @@ import sys
 import httpx
 from schwab.client import Client
 from utils import create_client
+from datetime import datetime
+from providers.schwab_lib import SchwabProvider
+from scanner.live_momentum import LiveMomentumScanner
 
 
 def test_schwab_fundamentals():
@@ -125,9 +128,6 @@ def test_live_scanner():
     print("Testing Live Momentum Scanner")
     print("=" * 60)
     
-    from providers.schwab_lib import SchwabProvider
-    from scanner.live_momentum import LiveMomentumScanner
-    
     client = create_client()
     provider = SchwabProvider(client)
     scanner = LiveMomentumScanner(provider)
@@ -189,7 +189,7 @@ def test_schwab_history():
     
     resp = client.get_price_history_every_five_minutes(
         symbol,
-        need_extended_hours_data=False
+        need_extended_hours_data=True
     )
     
     if resp.status_code != httpx.codes.OK:
@@ -204,7 +204,6 @@ def test_schwab_history():
     # Show last 5 candles
     print(f"\nLast 5 candles:")
     for c in candles[-5:]:
-        from datetime import datetime
         dt = datetime.fromtimestamp(c["datetime"] / 1000)
         print(f"  {dt}: O={c['open']:.2f} H={c['high']:.2f} L={c['low']:.2f} C={c['close']:.2f} V={c['volume']:,}")
 

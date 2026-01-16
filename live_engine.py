@@ -152,12 +152,16 @@ class LiveTradingEngine:
         
         return prices
     
-    def _fetch_candles(self, symbol: str) -> Optional[Candle]:
+    def _fetch_candles(self, symbol: str, num_candles: int = 1) -> List[Candle]:
         """
-        Fetch the latest 5-minute candle for a symbol.
+        Fetch the last N 5-minute candles for a symbol.
+        
+        Args:
+            symbol: Stock symbol
+            num_candles: Number of candles to fetch (from most recent)
         
         Returns:
-            Latest Candle or None if fetch failed
+            List of Candles (oldest first), may be empty
         """
         
         try:
@@ -171,43 +175,52 @@ class LiveTradingEngine:
             
             if resp.status_code != httpx.codes.OK:
                 self._log(f"Failed to get candles for {symbol}: {resp.status_code}")
-                return None
+                return []
             
             data = resp.json()
             candles = data.get("candles", [])
             
             if not candles:
-                return None
+                return []
             
-            # Get the latest candle
-            latest = candles[-1]
-            candle_time = datetime.fromtimestamp(latest["datetime"] / 1000)
+            # Get last N candles (excluding the very last which may be incomplete)
+            # Take from index -(num_candles+1) to -1
+            start_idx = max(0, len(candles) - num_candles - 1)
+            selected = candles[start_idx:-1] if len(candles) > 1 else []
             
-            # Skip if we already processed this candle
-            if symbol in self._last_candle_time:
-                if candle_time <= self._last_candle_time[symbol]:
-                    return None
+            result = []
+            for c in selected:
+                candle_time = datetime.fromtimestamp(c["datetime"] / 1000)
+                
+                # Skip if we already processed this candle
+                if symbol in self._last_candle_time:
+                    if candle_time <= self._last_candle_time[symbol]:
+                        continue
+                
+                result.append(Candle(
+                    timestamp=candle_time,
+                    open=float(c["open"]),
+                    high=float(c["high"]),
+                    low=float(c["low"]),
+                    close=float(c["close"]),
+                    volume=int(c["volume"])
+                ))
             
-            self._last_candle_time[symbol] = candle_time
+            # Update last candle time
+            if result:
+                self._last_candle_time[symbol] = result[-1].timestamp
             
-            return Candle(
-                timestamp=candle_time,
-                open=float(latest["open"]),
-                high=float(latest["high"]),
-                low=float(latest["low"]),
-                close=float(latest["close"]),
-                volume=int(latest["volume"])
-            )
+            return result
             
         except Exception as e:
             self._log(f"Error fetching candles for {symbol}: {e}")
-            return None
+            return []
     
-    def _process_candles(self):
+    def _process_candles(self, num_candles: int = 1):
         """Fetch and process 5-minute candles for all symbols."""
         for symbol in self.symbols:
-            candle = self._fetch_candles(symbol)
-            if candle:
+            candles = self._fetch_candles(symbol, num_candles)
+            for candle in candles:
                 self._log(
                     f"{symbol}: O={candle.open:.2f} H={candle.high:.2f} "
                     f"L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}"
@@ -251,7 +264,7 @@ class LiveTradingEngine:
         self._log("Starting live trading engine...")
         self.running = True
         
-        last_candle_minute = -1  # Track which 5-min slot we last polled
+        last_candle_slot = 5  # Slot 5 = :25 minute mark, ensures we catch candles from market open
         
         try:
             while self.running:
@@ -264,9 +277,14 @@ class LiveTradingEngine:
                 
                 # Poll candles at each 5-minute boundary (e.g., :00, :05, :10...)
                 current_5min_slot = now_et.minute // 5
-                if current_5min_slot != last_candle_minute:
-                    self._process_candles()
-                    last_candle_minute = current_5min_slot
+                if current_5min_slot != last_candle_slot:
+                    # Calculate how many candles we need to process
+                    num_candles = current_5min_slot - last_candle_slot
+                    if num_candles < 0:
+                        num_candles += 12  # Handle hour boundary (0-11 slots per hour)
+                    
+                    self._process_candles(num_candles)
+                    last_candle_slot = current_5min_slot
                 
                 # Fast polling for real-time checks when needed
                 if self._needs_realtime_polling():
