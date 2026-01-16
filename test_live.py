@@ -12,7 +12,7 @@ import sys
 import httpx
 from schwab.client import Client
 from utils import create_client
-from datetime import datetime
+from datetime import datetime, timedelta
 from providers.schwab_lib import SchwabProvider
 from scanner.live_momentum import LiveMomentumScanner
 
@@ -189,7 +189,7 @@ def test_schwab_history():
     
     resp = client.get_price_history_every_five_minutes(
         symbol,
-        need_extended_hours_data=True
+        need_extended_hours_data=False
     )
     
     if resp.status_code != httpx.codes.OK:

@@ -165,9 +165,13 @@ class LiveTradingEngine:
         """
         
         try:
+            # Start from market open today to limit data
+            now_et = datetime.now(self.ET)
+            market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            
             resp = self.client.get_price_history_every_five_minutes(
                 symbol,
-                start_datetime=None,  # Use default (recent)
+                start_datetime=market_open,
                 end_datetime=None,
                 need_extended_hours_data=False,
                 need_previous_close=False
