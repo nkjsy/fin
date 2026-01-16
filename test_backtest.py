@@ -1,7 +1,9 @@
 import pandas as pd
 from strategy.bull_flag import BullFlagStrategy
 
-def run_test():
+
+def test_bull_flag_strategy():
+    """Test BullFlagStrategy signal generation."""
     # Create dummy data
     data = {
         'Open': [100, 101, 102, 101, 101.5],
@@ -26,5 +28,6 @@ def run_test():
     print(f"\nSignal at index 0: {df_res['Signal'].iloc[0]}")
     print(f"Signal at index 1: {df_res['Signal'].iloc[1]}")
 
+
 if __name__ == "__main__":
-    run_test()
+    test_bull_flag_strategy()
