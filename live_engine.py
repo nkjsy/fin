@@ -296,20 +296,3 @@ class LiveTradingEngine:
             self.broker.print_summary()
         
         self._log("Engine stopped")
-
-
-def run_live_trading(
-    client: Client,
-    broker: IBroker,
-    symbols: List[str]
-):
-    """
-    Convenience function to run live trading.
-    
-    Args:
-        client: Authenticated Schwab Client
-        broker: IBroker implementation
-        symbols: Symbols to trade
-    """
-    engine = LiveTradingEngine(client, broker, symbols)
-    engine.start()

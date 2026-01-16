@@ -11,7 +11,6 @@ Usage:
 """
 
 import argparse
-import asyncio
 import sys
 
 from providers.schwab_lib import SchwabProvider
@@ -83,25 +82,6 @@ def run_scanner(provider: SchwabProvider, wait_for_volume: bool = True) -> list:
     )
 
 
-async def run_trading_session(client, broker, symbols: list):
-    """
-    Run the live trading session.
-    
-    Args:
-        client: Authenticated Schwab client
-        broker: IBroker implementation
-        symbols: Symbols to trade
-    """
-    engine = LiveTradingEngine(client, broker, symbols)
-    
-    try:
-        await engine.run_until_market_close()
-    except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
-    finally:
-        await engine.stop()
-
-
 def main():
     """Main entry point."""
     args = parse_args()
@@ -168,8 +148,9 @@ def main():
     
     # Run trading session
     print("\n--- Starting Live Trading Session ---")
+    engine = LiveTradingEngine(client, broker, symbols)
     try:
-        asyncio.run(run_trading_session(client, broker, symbols))
+        engine.start()
     except Exception as e:
         print(f"\n❌ Trading session error: {e}")
         raise
