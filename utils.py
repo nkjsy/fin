@@ -95,15 +95,25 @@ def wait_for_market_open(client):
 
 
 def create_client():
-    """Create authenticated Schwab client."""
+    """
+    Create authenticated Schwab client.
     
+    Uses max_token_age for proactive token refresh. Per schwab-py docs, tokens
+    expire after 7 days. Setting max_token_age to ~5.5 days ensures the token
+    gets refreshed on Monday mornings if created the previous week.
+    """
     print("Authenticating with Schwab...")
+    
+    # 5.5 days in seconds - triggers proactive refresh on Monday if token
+    # was created on Tuesday or earlier of the previous week
+    MAX_TOKEN_AGE_SECONDS = 5.5 * 24 * 60 * 60  # 475200 seconds
     
     client = easy_client(
         api_key=config.SCHWAB_API_KEY,
         app_secret=config.SCHWAB_APP_SECRET,
         callback_url=config.SCHWAB_CALLBACK_URL,
-        token_path=config.SCHWAB_TOKEN_PATH
+        token_path=config.SCHWAB_TOKEN_PATH,
+        max_token_age=MAX_TOKEN_AGE_SECONDS
     )
     
     print("Authentication successful")
