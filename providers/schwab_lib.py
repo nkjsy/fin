@@ -7,6 +7,7 @@ Synchronous implementation for compatibility with existing scanners.
 
 import pandas as pd
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import httpx
 
 from schwab.auth import easy_client
@@ -64,7 +65,7 @@ class SchwabProvider(IDataProvider):
             if end_date:
                 end_dt = pd.to_datetime(end_date)
             else:
-                end_dt = datetime.now()
+                end_dt = datetime.now(ZoneInfo("America/New_York"))
             
             # Calculate start_date based on period
             start_dt = self._calculate_start_date(period, end_dt)
@@ -152,8 +153,8 @@ class SchwabProvider(IDataProvider):
         df = pd.DataFrame(candles)
         
         # Schwab returns: datetime (epoch ms), open, high, low, close, volume
-        # Convert epoch milliseconds to datetime
-        df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
+        # Convert epoch milliseconds to datetime in Eastern time
+        df["datetime"] = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert("America/New_York")
         
         # Standardize column names to match existing format
         df = df.rename(columns={

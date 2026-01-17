@@ -201,7 +201,7 @@ class LiveMomentumScanner(BaseScanner):
                 else:
                     return False
             
-            df["Datetime"] = pd.to_datetime(df["Datetime"])
+            # Extract date and time components (works with timezone-aware datetimes)
             df["Date"] = df["Datetime"].dt.date
             df["Time"] = df["Datetime"].dt.time
             

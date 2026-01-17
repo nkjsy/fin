@@ -9,6 +9,7 @@ Usage:
 """
 
 import sys
+from zoneinfo import ZoneInfo
 import httpx
 from schwab.client import Client
 from utils import create_client
@@ -187,8 +188,12 @@ def test_schwab_history():
     symbol = "AAPL"
     print(f"\nFetching 5-minute candles for {symbol}...")
     
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+
     resp = client.get_price_history_every_five_minutes(
         symbol,
+        start_datetime=market_open,
         need_extended_hours_data=False
     )
     
@@ -203,9 +208,30 @@ def test_schwab_history():
     
     # Show last 5 candles
     print(f"\nLast 5 candles:")
-    for c in candles[-5:]:
-        dt = datetime.fromtimestamp(c["datetime"] / 1000)
+    for c in candles:
+        dt = datetime.fromtimestamp(c["datetime"] / 1000, tz=ZoneInfo("America/New_York"))
         print(f"  {dt}: O={c['open']:.2f} H={c['high']:.2f} L={c['low']:.2f} C={c['close']:.2f} V={c['volume']:,}")
+
+
+def test_volume_confirmation():
+    """
+    Test the volume confirmation logic in LiveMomentumScanner.
+    """
+    print("=" * 60)
+    print("Testing Volume Confirmation")
+    print("=" * 60)
+    
+    client = create_client()
+    provider = SchwabProvider(client)
+    scanner = LiveMomentumScanner(provider)
+    
+    # Test with known liquid symbols
+    test_symbols = ["AAPL", "TSLA", "NVDA"]
+    
+    for symbol in test_symbols:
+        print(f"\n{symbol}: ", end="")
+        result = scanner._confirm_volume(symbol)
+        print(f"{'CONFIRMED' if result else 'NOT CONFIRMED'}")
 
 
 if __name__ == "__main__":
@@ -215,6 +241,7 @@ if __name__ == "__main__":
         "scanner": test_live_scanner,
         "quotes": test_schwab_quotes,
         "history": test_schwab_history,
+        "volume": test_volume_confirmation,
     }
     
     if len(sys.argv) > 1:

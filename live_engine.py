@@ -194,7 +194,7 @@ class LiveTradingEngine:
             
             result = []
             for c in selected:
-                candle_time = datetime.fromtimestamp(c["datetime"] / 1000)
+                candle_time = datetime.fromtimestamp(c["datetime"] / 1000, tz=ZoneInfo("America/New_York"))
                 
                 # Skip if we already processed this candle
                 if symbol in self._last_candle_time:
