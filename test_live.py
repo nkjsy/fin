@@ -9,6 +9,7 @@ Usage:
 """
 
 import sys
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 import httpx
 from schwab.client import Client
@@ -123,7 +124,7 @@ def test_schwab_movers():
 
 def test_live_scanner():
     """
-    Test the LiveMomentumScanner without waiting for volume.
+    Test the full LiveMomentumScanner with mocked time (9:41 AM ET).
     """
     print("=" * 60)
     print("Testing Live Momentum Scanner")
@@ -133,13 +134,18 @@ def test_live_scanner():
     provider = SchwabProvider(client)
     scanner = LiveMomentumScanner(provider)
     
-    # Run scanner without volume wait (for testing)
-    symbols = scanner.scan(
-        wait_for_volume=False,
-        min_price=2.0,
-        max_price=50.0,
-        max_float=100_000_000
-    )
+    # Mock datetime.now to return 9:41 AM ET so wait_until_time passes immediately
+    fake_now = datetime.now(ZoneInfo("America/New_York")).replace(month=1, day=16,hour=9, minute=41, second=0)
+    
+    with patch("utils.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fake_now
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        
+        symbols = scanner.scan(
+            min_price=2.0,
+            max_price=50.0,
+            max_float=100_000_000
+        )
     
     print(f"\nScanner returned {len(symbols)} symbols: {symbols}")
 

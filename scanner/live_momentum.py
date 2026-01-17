@@ -41,13 +41,11 @@ class LiveMomentumScanner(BaseScanner):
         # All available indices
         self.indices = ["NASDAQ", "NYSE", "$DJI", "$COMPX", "$SPX"]
     
-    def scan(self, wait_for_volume: bool = True, min_price: float = 0, max_price: float = float('inf'), max_float: int = float('inf'), **kwargs) -> list:
+    def scan(self, min_price: float = 0, max_price: float = float('inf'), max_float: int = float('inf'), **kwargs) -> list:
         """
         Scan for top movers with volume confirmation.
         
         Args:
-            wait_for_volume: If True, waits until 9:40 ET for volume confirmation.
-                           If False, returns movers immediately (for testing).
             min_price: Minimum price filter (default: 0)
             max_price: Maximum price filter (default: inf)
             max_float: Maximum float shares filter (default: inf)
@@ -81,10 +79,6 @@ class LiveMomentumScanner(BaseScanner):
         
         symbols = [m["symbol"] for m in filtered_movers]
         print(f"Movers after filtering: {symbols}")
-        
-        if not wait_for_volume:
-            # Skip volume confirmation (for testing)
-            return symbols
         
         # Step 3: Wait until 9:40 ET for volume data
         wait_until_time(9, 40, "checking volume")

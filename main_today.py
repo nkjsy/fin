@@ -49,11 +49,6 @@ def parse_args():
         help="Symbols to trade (used with --skip-scan)"
     )
     parser.add_argument(
-        "--no-wait",
-        action="store_true",
-        help="Don't wait for volume confirmation (for testing)"
-    )
-    parser.add_argument(
         "--initial-cash",
         type=float,
         default=100000.0,
@@ -62,20 +57,18 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_scanner(provider: SchwabProvider, wait_for_volume: bool = True) -> list:
+def run_scanner(provider: SchwabProvider) -> list:
     """
     Run the live momentum scanner.
     
     Args:
         provider: SchwabProvider instance
-        wait_for_volume: Whether to wait for 9:40 volume confirmation
         
     Returns:
         List of confirmed ticker symbols
     """
     scanner = LiveMomentumScanner(provider)
     return scanner.scan(
-        wait_for_volume=wait_for_volume,
         min_price=MIN_PRICE,
         max_price=MAX_PRICE,
         max_float=MAX_FLOAT
@@ -137,7 +130,7 @@ def main():
         # Run scanner
         print("\n--- Running Live Momentum Scanner ---")
         print(f"Filters: price ${MIN_PRICE}-${MAX_PRICE}, max float {MAX_FLOAT:,}")
-        symbols = run_scanner(provider, wait_for_volume=not args.no_wait)
+        symbols = run_scanner(provider)
         
         if not symbols:
             print("\n❌ No stocks passed the scanner criteria")
