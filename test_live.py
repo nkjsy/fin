@@ -110,13 +110,16 @@ def test_schwab_movers():
                 continue
             
             data = resp.json()
-            movers = data.get("screeners", [])[:5]  # Top 5
+            movers = data.get("screeners", [])[:3]  # Top 3 for debug
+            
+            if not movers:
+                print("  No movers found.")
+                continue
             
             for m in movers:
-                symbol = m.get("symbol", "?")
-                price = m.get("lastPrice", 0)
-                pct = m.get("netPercentChangeInDouble", 0)
-                print(f"  {symbol}: ${price:.2f} ({pct:+.2f}%)")
+                print(f"\n  --- {m.get('symbol', '?')} ---")
+                for key, value in m.items():
+                    print(f"    {key}: {value}")
                 
         except Exception as e:
             print(f"  Error: {e}")
@@ -135,17 +138,13 @@ def test_live_scanner():
     scanner = LiveMomentumScanner(provider)
     
     # Mock datetime.now to return 9:41 AM ET so wait_until_time passes immediately
-    fake_now = datetime.now(ZoneInfo("America/New_York")).replace(month=1, day=16,hour=9, minute=41, second=0)
+    fake_now = datetime.now(ZoneInfo("America/New_York")).replace(hour=9, minute=41, second=0)
     
     with patch("utils.datetime") as mock_datetime:
         mock_datetime.now.return_value = fake_now
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
         
-        symbols = scanner.scan(
-            min_price=2.0,
-            max_price=50.0,
-            max_float=100_000_000
-        )
+        symbols = scanner.scan(min_price=2.0)
     
     print(f"\nScanner returned {len(symbols)} symbols: {symbols}")
 
@@ -174,11 +173,10 @@ def test_schwab_quotes():
     
     for symbol, quote_data in data.items():
         quote = quote_data.get("quote", {})
-        print(f"\n{symbol}:")
-        print(f"  Last Price: ${quote.get('lastPrice', 0):.2f}")
-        print(f"  Bid: ${quote.get('bidPrice', 0):.2f} x {quote.get('bidSize', 0)}")
-        print(f"  Ask: ${quote.get('askPrice', 0):.2f} x {quote.get('askSize', 0)}")
-        print(f"  Volume: {quote.get('totalVolume', 0):,}")
+        print(f"\n--- {symbol} ---")
+        # Show all fields to find gap-related ones
+        for key, value in sorted(quote.items()):
+            print(f"  {key}: {value}")
 
 
 def test_schwab_history():

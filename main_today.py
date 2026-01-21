@@ -23,8 +23,6 @@ from utils import wait_for_market_open, create_client
 
 # Scanner filter constants
 MIN_PRICE = 2.0
-MAX_PRICE = 50.0
-MAX_FLOAT = 100_000_000  # 100 million shares
 
 
 def parse_args():
@@ -68,11 +66,7 @@ def run_scanner(provider: SchwabProvider) -> list:
         List of confirmed ticker symbols
     """
     scanner = LiveMomentumScanner(provider)
-    return scanner.scan(
-        min_price=MIN_PRICE,
-        max_price=MAX_PRICE,
-        max_float=MAX_FLOAT
-    )
+    return scanner.scan(min_price=MIN_PRICE)
 
 
 def main():
@@ -129,7 +123,7 @@ def main():
     else:
         # Run scanner
         print("\n--- Running Live Momentum Scanner ---")
-        print(f"Filters: price ${MIN_PRICE}-${MAX_PRICE}, max float {MAX_FLOAT:,}")
+        print(f"Filters: min price ${MIN_PRICE}, gap >= 3%, volume 5x")
         symbols = run_scanner(provider)
         
         if not symbols:

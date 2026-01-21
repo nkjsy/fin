@@ -37,10 +37,3 @@ class YFinanceProvider(IDataProvider):
         except Exception as e:
             print(f"Error fetching {ticker}: {e}")
             return pd.DataFrame()
-
-    def get_quote(self, ticker: str) -> float:
-        try:
-            stock = yf.Ticker(ticker)
-            return stock.fast_info.last_price
-        except:
-            return 0.0

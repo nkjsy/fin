@@ -13,10 +13,3 @@ class IDataProvider(ABC):
         :return: DataFrame with OHLCV data
         """
         pass
-
-    @abstractmethod
-    def get_quote(self, ticker: str) -> float:
-        """
-        Get the latest price.
-        """
-        pass

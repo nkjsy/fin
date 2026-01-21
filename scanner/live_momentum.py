@@ -1,90 +1,86 @@
 """
 Live Momentum Scanner
 
-Scans for top movers at market open using Schwab API.
+Scans for gap-up stocks using Finviz screener + Schwab quotes.
 Confirms volume 9:30-9:40 against previous day.
 """
 
-import time
-from datetime import datetime, timedelta
 import pandas as pd
-from zoneinfo import ZoneInfo
 from datetime import time as dt_time
+from tqdm import tqdm
+from finviz.screener import Screener
+
 from scanner.base import BaseScanner
 from providers.schwab_lib import SchwabProvider
-from utils import wait_until_time, get_float_shares
+from utils import wait_until_time
+
+
+# Finviz screener URL: price < $50, float < 100M, news since yesterday
+FINVIZ_SCREENER_URL = "https://finviz.com/screener.ashx?v=111&f=sh_float_u100,sh_price_u50,news_date_sinceyesterdayafter"
 
 
 class LiveMomentumScanner(BaseScanner):
     """
-    Live scanner that uses Schwab's market movers API and confirms with volume.
+    Live scanner using Finviz for initial candidates + Schwab for gap/volume confirmation.
     
     Workflow:
-    1. At 9:30, fetch top 10 up movers from all indices (NASDAQ, NYSE, $DJI, $COMPX, $SPX)
-    2. Apply initial filters (price range, float shares)
-    3. Wait until 9:40 to collect volume data
-    4. Confirm each mover has 5x relative volume vs previous day's same time window
+    1. Fetch candidates from Finviz (price < $50, float < 100M, recent news)
+    2. Get quotes from Schwab, filter by min_price and gap >= 3%
+    3. Take top 10 by gap percentage
+    4. Wait until 9:40 to confirm 5x relative volume
     5. Return confirmed tickers
     """
     
     def __init__(self, provider: SchwabProvider, data_dir: str = "data"):
-        """
-        Initialize LiveMomentumScanner.
-        
-        Args:
-            provider: SchwabProvider instance for API calls
-            data_dir: Data directory (for BaseScanner compatibility)
-        """
         super().__init__(data_dir)
         self.provider = provider
         self.relative_volume_threshold = 5.0  # 5x previous day volume
-        # All available indices
-        self.indices = ["NASDAQ", "NYSE", "$DJI", "$COMPX", "$SPX"]
+        self.min_gap_percent = 3.0  # Minimum gap up percentage
+        self.max_results = 10  # Max symbols after gap filter
     
-    def scan(self, min_price: float = 0, max_price: float = float('inf'), max_float: int = float('inf'), **kwargs) -> list:
+    def scan(self, min_price: float = 2.0, **kwargs) -> list:
         """
-        Scan for top movers with volume confirmation.
+        Scan for gap-up stocks with volume confirmation.
         
         Args:
-            min_price: Minimum price filter (default: 0)
-            max_price: Maximum price filter (default: inf)
-            max_float: Maximum float shares filter (default: inf)
+            min_price: Minimum price filter (default: $2)
             
         Returns:
             List of confirmed ticker symbols
         """
         print("--- Live Momentum Scanner ---")
         
-        # Step 1: Get top 10 up movers from all indices
-        print("Fetching top 10 up movers from all indices...")
-        movers = self._get_movers_from_all_indices()
+        # Step 1: Get candidates from Finviz
+        print("\nStep 1: Fetching candidates from Finviz...")
+        symbols = self._get_finviz_candidates()
         
-        if not movers:
-            print("No movers found.")
+        if not symbols:
+            print("No candidates from Finviz.")
             return []
         
-        symbols = [m["symbol"] for m in movers]
-        print(f"Top movers from all indices: {symbols}")
+        print(f"Finviz returned {len(symbols)} candidates: {symbols[:20]}{'...' if len(symbols) > 20 else ''}")
         
-        for m in movers:
-            print(f"  {m['symbol']}: ${m['lastPrice']:.2f} ({m['netPercentChange']:+.2f}%)")
+        # Step 2: Get quotes and filter by min_price and gap
+        print(f"\nStep 2: Filtering by min_price (${min_price}) and gap (>= {self.min_gap_percent}%)...")
+        gap_stocks = self._filter_by_gap(symbols, min_price)
         
-        # Step 2: Apply initial filters (price range, float shares)
-        print(f"\nApplying initial filters (price: ${min_price}-${max_price}, max float: {max_float:,})...")
-        filtered_movers = self._apply_initial_filters(movers, min_price, max_price, max_float)
-        
-        if not filtered_movers:
-            print("No movers passed initial filters.")
+        if not gap_stocks:
+            print("No stocks passed gap filter.")
             return []
         
-        symbols = [m["symbol"] for m in filtered_movers]
-        print(f"Movers after filtering: {symbols}")
+        # Take top 10 by gap
+        gap_stocks = gap_stocks[:self.max_results]
+        symbols = [s["symbol"] for s in gap_stocks]
+        
+        print(f"Top {len(gap_stocks)} gap-up stocks:")
+        for s in gap_stocks:
+            print(f"  {s['symbol']}: ${s['price']:.2f} (gap: {s['gap_percent']:+.2f}%)")
         
         # Step 3: Wait until 9:40 ET for volume data
         wait_until_time(9, 40, "checking volume")
         
-        # Step 4: Confirm volume for each mover
-        print("\nConfirming volume (5x threshold)...")
+        # Step 4: Confirm volume for each stock
+        print("\nStep 3: Confirming volume (5x threshold)...")
         confirmed = []
         
         for symbol in symbols:
@@ -97,78 +93,72 @@ class LiveMomentumScanner(BaseScanner):
         print(f"\nConfirmed {len(confirmed)} tickers: {confirmed}")
         return confirmed
     
-    def _get_movers_from_all_indices(self) -> list:
+    def _get_finviz_candidates(self) -> list:
         """
-        Fetch top 10 movers from each index and combine them.
+        Fetch stock symbols from Finviz screener.
         
         Returns:
-            List of unique movers sorted by percent change
+            List of ticker symbols
         """
-        all_movers = []
-        seen_symbols = set()
-        
-        for index in self.indices:
-            try:
-                movers = self.provider.get_movers(index=index, direction="up", count=10)
-                for m in movers:
-                    symbol = m["symbol"]
-                    if symbol not in seen_symbols:
-                        seen_symbols.add(symbol)
-                        m["source_index"] = index
-                        all_movers.append(m)
-                print(f"  {index}: found {len(movers)} movers")
-            except Exception as e:
-                print(f"  {index}: error fetching movers - {e}")
-        
-        # Sort by percent change descending
-        all_movers.sort(key=lambda x: x.get("netPercentChange", 0), reverse=True)
-        
-        print(f"Combined {len(all_movers)} unique movers from all indices")
-        return all_movers
+        try:
+            stock_list = Screener.init_from_url(FINVIZ_SCREENER_URL)
+            return [stock["Ticker"] for stock in stock_list]
+        except Exception as e:
+            print(f"Error fetching from Finviz: {e}")
+            return []
     
-    def _apply_initial_filters(self, movers: list, min_price: float, max_price: float, max_float: int) -> list:
+    def _filter_by_gap(self, symbols: list, min_price: float) -> list:
         """
-        Apply price range and float shares filters to movers.
+        Filter symbols by minimum price and gap percentage using Schwab quotes.
         
         Args:
-            movers: List of mover dicts
-            min_price: Minimum price
-            max_price: Maximum price
-            max_float: Maximum float shares
+            symbols: List of ticker symbols
+            min_price: Minimum price threshold
             
         Returns:
-            Filtered list of movers
+            List of dicts with symbol, price, gap_percent - sorted by gap descending
         """
-        filtered = []
+        gap_stocks = []
         
-        for m in movers:
-            symbol = m["symbol"]
-            price = m.get("lastPrice", 0)
-            
-            # Check price range first (we already have price from movers data)
-            if price < min_price or price > max_price:
-                print(f"  ✗ {symbol}: price ${price:.2f} outside range ${min_price}-${max_price}")
+        for symbol in tqdm(symbols):
+            try:
+                resp = self.provider.client.get_quote(symbol)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                quote = data.get(symbol, {}).get("quote", {})
+            except Exception as e:
+                print(f"  Error getting quote for {symbol}: {e}")
                 continue
             
-            # Check float shares if max_float filter is applied
-            if max_float < float('inf'):
-                float_shares = get_float_shares(symbol)
-                
-                if float_shares is None:
-                    print(f"  ? {symbol}: no float data available, skipping")
-                    continue
-                
-                if float_shares > max_float:
-                    print(f"  ✗ {symbol}: float {float_shares:,.0f} > max {max_float:,}")
-                    continue
-                
-                print(f"  ✓ {symbol}: price ${price:.2f}, float {float_shares:,.0f}")
-            else:
-                print(f"  ✓ {symbol}: price ${price:.2f}")
+            price = quote.get("lastPrice", 0)
+            open_price = quote.get("openPrice", 0)
+            close_price = quote.get("closePrice", 0)
             
-            filtered.append(m)
+            # Filter by min_price
+            if price < min_price:
+                continue
+            
+            # Calculate gap: (today's open - yesterday's close) / yesterday's close
+            if close_price <= 0 or open_price <= 0:
+                continue
+            
+            gap_percent = (open_price - close_price) / close_price * 100
+            
+            # Filter by gap percentage
+            if gap_percent < self.min_gap_percent:
+                continue
+            
+            gap_stocks.append({
+                "symbol": symbol,
+                "price": price,
+                "gap_percent": gap_percent
+            })
         
-        return filtered
+        # Sort by gap descending
+        gap_stocks.sort(key=lambda x: x["gap_percent"], reverse=True)
+        
+        return gap_stocks
     
     def _confirm_volume(self, symbol: str) -> bool:
         """
@@ -195,7 +185,7 @@ class LiveMomentumScanner(BaseScanner):
                 else:
                     return False
             
-            # Extract date and time components (works with timezone-aware datetimes)
+            # Extract date and time components
             df["Date"] = df["Datetime"].dt.date
             df["Time"] = df["Datetime"].dt.time
             
