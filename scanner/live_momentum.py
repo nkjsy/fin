@@ -215,7 +215,7 @@ class LiveMomentumScanner(BaseScanner):
                 return False
             
             ratio = vol_today / vol_yesterday
-            print(f"    {symbol}: {vol_today:,.0f} vs {vol_yesterday:,.0f} ({ratio:.1f}x)")
+            print(f"    {symbol}: today ({today}) {vol_today:,.0f} vs yesterday ({yesterday}) {vol_yesterday:,.0f} ({ratio:.1f}x)")
             
             return ratio >= self.relative_volume_threshold
             

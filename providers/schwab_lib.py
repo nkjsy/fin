@@ -15,6 +15,7 @@ from schwab.client import Client
 
 from providers.interfaces import IDataProvider
 import config
+from utils import calculate_start_date
 
 
 class SchwabProvider(IDataProvider):
@@ -68,7 +69,7 @@ class SchwabProvider(IDataProvider):
                 end_dt = datetime.now(ZoneInfo("America/New_York"))
             
             # Calculate start_date based on period
-            start_dt = self._calculate_start_date(period, end_dt)
+            start_dt = calculate_start_date(self.client, period, end_dt)
             
             # Call appropriate Schwab API method based on interval
             resp = self._fetch_price_history(ticker, interval, start_dt, end_dt)
@@ -86,23 +87,6 @@ class SchwabProvider(IDataProvider):
         except Exception as e:
             print(f"Error fetching {ticker}: {e}")
             return pd.DataFrame()
-    
-    def _calculate_start_date(self, period: str, end_dt: datetime) -> datetime:
-        """Calculate start date based on period string."""
-        period_map = {
-            "1d": timedelta(days=1),
-            "2d": timedelta(days=2),
-            "5d": timedelta(days=5),
-            "1mo": timedelta(days=30),
-            "3mo": timedelta(days=90),
-            "6mo": timedelta(days=180),
-            "1y": timedelta(days=365),
-            "2y": timedelta(days=730),
-            "5y": timedelta(days=1825),
-            "max": timedelta(days=365 * 20),  # 20 years
-        }
-        delta = period_map.get(period, timedelta(days=365))
-        return end_dt - delta
     
     def _fetch_price_history(self, ticker: str, interval: str, start_dt: datetime, end_dt: datetime):
         """Fetch price history using the appropriate Schwab API method."""

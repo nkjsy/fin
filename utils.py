@@ -219,7 +219,96 @@ def get_next_day(date_str):
     next_day = date_obj + timedelta(days=1)
     return next_day.strftime("%Y-%m-%d")
 
+
+def calculate_start_date(client, period: str, end_dt: datetime) -> datetime:
+    """
+    Calculate start date based on period string.
+    
+    For short periods (1d-5d), uses market hours API to find actual trading days,
+    avoiding weekends and holidays.
+    
+    Args:
+        client: Schwab client for market hours API
+        period: Period string like '1d', '2d', '5d', '1mo', '1y', etc.
+        end_dt: End datetime (timezone-aware)
+        
+    Returns:
+        Start datetime (timezone-aware)
+    """
+    # Map period to number of trading days needed
+    trading_day_periods = {
+        "1d": 1,
+        "2d": 2,
+        "5d": 5,
+    }
+    
+    # Map period to calendar days for longer periods
+    calendar_day_periods = {
+        "1mo": timedelta(days=30),
+        "3mo": timedelta(days=90),
+        "6mo": timedelta(days=180),
+        "1y": timedelta(days=365),
+        "2y": timedelta(days=730),
+        "5y": timedelta(days=1825),
+        "max": timedelta(days=365 * 20),  # 20 years
+    }
+    
+    # For short periods, count actual trading days
+    if period in trading_day_periods:
+        trading_days_needed = trading_day_periods[period]
+        check_date = end_dt.date() - timedelta(days=1)
+        trading_days_found = 0
+        max_lookback = 15  # Safety limit
+        
+        for _ in range(max_lookback):
+            try:
+                resp = client.get_market_hours(
+                    Client.MarketHours.Market.EQUITY,
+                    date=check_date
+                )
+                if resp.status_code == httpx.codes.OK:
+                    data = resp.json()
+                    equity_data = data.get("equity", {})
+                    market_info = equity_data.get("EQ") or equity_data.get("equity") or {}
+                    
+                    if market_info.get("isOpen", False):
+                        trading_days_found += 1
+                        if trading_days_found >= trading_days_needed:
+                            # Return start of this trading day
+                            return datetime.combine(check_date, datetime.min.time()).replace(
+                                tzinfo=ZoneInfo("America/New_York")
+                            )
+            except Exception:
+                pass
+            
+            check_date -= timedelta(days=1)
+        
+        # Fallback if API fails
+        return end_dt - timedelta(days=trading_days_needed + 4)
+    
+    # For longer periods, use calendar days
+    if period in calendar_day_periods:
+        return end_dt - calendar_day_periods[period]
+    
+    # Fallback to 1 year
+    return end_dt - timedelta(days=365)
+
+
 if __name__ == "__main__":
     # sp = get_sp500_tickers()
-    us = get_us_stocks()
-    print(f"US Tickers: {us[:5]} ... Total: {len(us)}")
+    # us = get_us_stocks()
+    # print(f"US Tickers: {us[:5]} ... Total: {len(us)}")
+    
+    # Test calculate_start_date
+    print("Testing calculate_start_date...")
+    
+    client = create_client()
+    ET = ZoneInfo("America/New_York")
+    
+    # Test with today as end date
+    end_dt = datetime.now(ET)
+    print(f"End date: {end_dt.strftime('%Y-%m-%d %A')}")
+    
+    # Test 2d period - should skip weekends/holidays
+    start_2d = calculate_start_date(client, "2d", end_dt)
+    print(f"  2d period start: {start_2d.strftime('%Y-%m-%d %A')}")

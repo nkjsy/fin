@@ -137,12 +137,15 @@ def test_live_scanner():
     provider = SchwabProvider(client)
     scanner = LiveMomentumScanner(provider)
     
-    # Mock datetime.now to return 9:41 AM ET so wait_until_time passes immediately
+    # Mock only datetime.now in utils module, preserving other datetime functionality
     fake_now = datetime.now(ZoneInfo("America/New_York")).replace(hour=9, minute=41, second=0)
     
     with patch("utils.datetime") as mock_datetime:
+        # Preserve the real datetime class behavior
         mock_datetime.now.return_value = fake_now
-        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+        mock_datetime.strptime = datetime.strptime
         
         symbols = scanner.scan(min_price=2.0)
     
