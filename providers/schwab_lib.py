@@ -140,6 +140,9 @@ class SchwabProvider(IDataProvider):
         # Convert epoch milliseconds to datetime in Eastern time
         df["datetime"] = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert("America/New_York")
         
+        # Remove duplicate timestamps (keep first)
+        df = df.drop_duplicates(subset=["datetime"], keep="first")
+        
         # Standardize column names to match existing format
         df = df.rename(columns={
             "datetime": "Datetime" if interval != "daily1" else "Date",

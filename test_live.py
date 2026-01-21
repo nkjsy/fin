@@ -233,12 +233,73 @@ def test_volume_confirmation():
     scanner = LiveMomentumScanner(provider)
     
     # Test with known liquid symbols
-    test_symbols = ["AAPL", "TSLA", "NVDA"]
+    test_symbols = ["AAPL", "TSLA", "CRVS"]
     
     for symbol in test_symbols:
         print(f"\n{symbol}: ", end="")
         result = scanner._confirm_volume(symbol)
         print(f"{'CONFIRMED' if result else 'NOT CONFIRMED'}")
+
+
+def test_volume_debug():
+    """
+    Debug volume data to see exactly which candles are being captured.
+    """
+    from datetime import time as dt_time
+    
+    print("=" * 60)
+    print("Debugging Volume Data")
+    print("=" * 60)
+    
+    client = create_client()
+    provider = SchwabProvider(client)
+    
+    symbol = "AAPL"
+    print(f"\nFetching 5-minute candles for {symbol}...")
+    
+    df = provider.get_history(symbol, interval="minute5", period="2d")
+    
+    if df.empty:
+        print("No data!")
+        return
+    
+    df["Date"] = df["Datetime"].dt.date
+    df["Time"] = df["Datetime"].dt.time
+    
+    dates = sorted(df["Date"].unique())
+    today = dates[-1]
+    yesterday = dates[-2]
+    
+    print(f"\nToday: {today}, Yesterday: {yesterday}")
+    
+    # Show all candles in the 9:30-9:45 window for both days
+    start_time = dt_time(9, 25)
+    end_time = dt_time(9, 50)
+    
+    for date in [yesterday, today]:
+        print(f"\n--- {date} (9:25-9:50 window) ---")
+        mask = (df["Date"] == date) & (df["Time"] >= start_time) & (df["Time"] < end_time)
+        window_df = df[mask]
+        for _, row in window_df.iterrows():
+            print(f"  {row['Datetime']} - Volume: {row['Volume']:,}")
+        
+        # Sum 9:30-9:40
+        sum_mask = (df["Date"] == date) & (df["Time"] >= dt_time(9, 30)) & (df["Time"] < dt_time(9, 40))
+        total = df[sum_mask]["Volume"].sum()
+        print(f"  SUM (9:30-9:40): {total:,}")
+    
+    # Print full day volume table and sum
+    # for date in [yesterday, today]:
+    #     print(f"\n{'='*60}")
+    #     print(f"FULL DAY: {date}")
+    #     print(f"{'='*60}")
+    #     day_df = df[df["Date"] == date].sort_values("Time")
+    #     for _, row in day_df.iterrows():
+    #         print(f"  {row['Time']} - Volume: {row['Volume']:,}")
+        
+    #     day_total = day_df["Volume"].sum()
+    #     print(f"\n  TOTAL DAY VOLUME: {day_total:,}")
+    #     print(f"  CANDLE COUNT: {len(day_df)}")
 
 
 if __name__ == "__main__":
@@ -249,6 +310,7 @@ if __name__ == "__main__":
         "quotes": test_schwab_quotes,
         "history": test_schwab_history,
         "volume": test_volume_confirmation,
+        "debug": test_volume_debug,
     }
     
     if len(sys.argv) > 1:
