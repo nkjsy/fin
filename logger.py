@@ -52,14 +52,17 @@ def _ensure_log_dir():
 
 def get_daily_log_path() -> str:
     """
-    Get the log file path for today (Eastern time).
+    Get a unique log file path for this run (Eastern time).
+    
+    Each run creates a new log file with timestamp to distinguish
+    multiple runs on the same day.
     
     Returns:
-        Path to today's log file (logs/YYYY-MM-DD.log)
+        Path to log file (logs/YYYY-MM-DD_HH-MM-SS.log)
     """
     _ensure_log_dir()
-    today = datetime.now(ET).strftime("%Y-%m-%d")
-    return os.path.join(LOG_DIR, f"{today}.log")
+    now = datetime.now(ET).strftime("%Y-%m-%d_%H-%M-%S")
+    return os.path.join(LOG_DIR, f"{now}.log")
 
 
 def enable_file_logging(log_file: str = None):
