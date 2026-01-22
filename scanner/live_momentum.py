@@ -13,6 +13,10 @@ from finviz.screener import Screener
 from scanner.base import BaseScanner
 from providers.schwab_lib import SchwabProvider
 from utils import wait_until_time
+from logger import get_logger
+
+
+logger = get_logger("SCANNER")
 
 
 # Finviz screener URL: price < $50, float < 100M, news since yesterday
@@ -48,49 +52,49 @@ class LiveMomentumScanner(BaseScanner):
         Returns:
             List of confirmed ticker symbols
         """
-        print("--- Live Momentum Scanner ---")
+        logger.info("--- Live Momentum Scanner ---")
         
         # Step 1: Get candidates from Finviz
-        print("\nStep 1: Fetching candidates from Finviz...")
+        logger.info("Step 1: Fetching candidates from Finviz...")
         symbols = self._get_finviz_candidates()
         
         if not symbols:
-            print("No candidates from Finviz.")
+            logger.info("No candidates from Finviz.")
             return []
         
-        print(f"Finviz returned {len(symbols)} candidates: {symbols[:20]}{'...' if len(symbols) > 20 else ''}")
+        logger.info(f"Finviz returned {len(symbols)} candidates: {symbols[:20]}{'...' if len(symbols) > 20 else ''}")
         
         # Step 2: Get quotes and filter by min_price and gap
-        print(f"\nStep 2: Filtering by min_price (${min_price}) and gap (>= {self.min_gap_percent}%)...")
+        logger.info(f"Step 2: Filtering by min_price (${min_price}) and gap (>= {self.min_gap_percent}%)...")
         gap_stocks = self._filter_by_gap(symbols, min_price)
         
         if not gap_stocks:
-            print("No stocks passed gap filter.")
+            logger.info("No stocks passed gap filter.")
             return []
         
         # Take top 10 by gap
         gap_stocks = gap_stocks[:self.max_results]
         symbols = [s["symbol"] for s in gap_stocks]
         
-        print(f"Top {len(gap_stocks)} gap-up stocks:")
+        logger.info(f"Top {len(gap_stocks)} gap-up stocks:")
         for s in gap_stocks:
-            print(f"  {s['symbol']}: ${s['price']:.2f} (gap: {s['gap_percent']:+.2f}%)")
+            logger.info(f"  {s['symbol']}: ${s['price']:.2f} (gap: {s['gap_percent']:+.2f}%)")
         
         # Step 3: Wait until 9:40 ET for volume data
         wait_until_time(9, 40, "checking volume")
         
         # Step 4: Confirm volume for each stock
-        print("\nStep 3: Confirming volume (5x threshold)...")
+        logger.info("Step 3: Confirming volume (5x threshold)...")
         confirmed = []
         
         for symbol in symbols:
             if self._confirm_volume(symbol):
                 confirmed.append(symbol)
-                print(f"  ✓ {symbol} - CONFIRMED")
+                logger.info(f"  ✓ {symbol} - CONFIRMED")
             else:
-                print(f"  ✗ {symbol} - insufficient volume")
+                logger.info(f"  ✗ {symbol} - insufficient volume")
         
-        print(f"\nConfirmed {len(confirmed)} tickers: {confirmed}")
+        logger.info(f"Confirmed {len(confirmed)} tickers: {confirmed}")
         return confirmed
     
     def _get_finviz_candidates(self) -> list:
@@ -104,7 +108,7 @@ class LiveMomentumScanner(BaseScanner):
             stock_list = Screener.init_from_url(FINVIZ_SCREENER_URL)
             return [stock["Ticker"] for stock in stock_list]
         except Exception as e:
-            print(f"Error fetching from Finviz: {e}")
+            logger.error(f"Error fetching from Finviz: {e}")
             return []
     
     def _filter_by_gap(self, symbols: list, min_price: float) -> list:
@@ -128,7 +132,7 @@ class LiveMomentumScanner(BaseScanner):
                 data = resp.json()
                 quote = data.get(symbol, {}).get("quote", {})
             except Exception as e:
-                print(f"  Error getting quote for {symbol}: {e}")
+                logger.error(f"  Error getting quote for {symbol}: {e}")
                 continue
             
             price = quote.get("lastPrice", 0)
@@ -175,7 +179,7 @@ class LiveMomentumScanner(BaseScanner):
             df = self.provider.get_history(symbol, interval="minute5", period="2d")
             
             if df.empty:
-                print(f"    No data for {symbol}")
+                logger.warning(f"    No data for {symbol}")
                 return False
             
             # Ensure Datetime column
@@ -193,7 +197,7 @@ class LiveMomentumScanner(BaseScanner):
             dates = sorted(df["Date"].unique())
             
             if len(dates) < 2:
-                print(f"    Not enough days of data for {symbol}")
+                logger.warning(f"    Not enough days of data for {symbol}")
                 return False
             
             today = dates[-1]
@@ -211,14 +215,14 @@ class LiveMomentumScanner(BaseScanner):
             vol_yesterday = get_window_volume(yesterday)
             
             if vol_yesterday == 0:
-                print(f"    No yesterday volume for {symbol}")
+                logger.warning(f"    No yesterday volume for {symbol}")
                 return False
             
             ratio = vol_today / vol_yesterday
-            print(f"    {symbol}: today ({today}) {vol_today:,.0f} vs yesterday ({yesterday}) {vol_yesterday:,.0f} ({ratio:.1f}x)")
+            logger.info(f"    {symbol}: today ({today}) {vol_today:,.0f} vs yesterday ({yesterday}) {vol_yesterday:,.0f} ({ratio:.1f}x)")
             
             return ratio >= self.relative_volume_threshold
             
         except Exception as e:
-            print(f"    Error checking volume for {symbol}: {e}")
+            logger.error(f"    Error checking volume for {symbol}: {e}")
             return False

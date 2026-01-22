@@ -12,14 +12,22 @@ Usage:
 
 import argparse
 import sys
+import time
 
 from providers.schwab_lib import SchwabProvider
 from scanner.live_momentum import LiveMomentumScanner
 from broker.paper_broker import PaperBroker
 from broker.schwab_broker import SchwabBroker
 from live_engine import LiveTradingEngine
-from utils import wait_for_market_open, AutoRefreshClient
+from utils import wait_for_market_open
+from client import AutoRefreshSchwabClient
+from logger import get_logger, enable_file_logging
 
+
+# Enable file logging for production (writes to logs/YYYY-MM-DD.log)
+enable_file_logging()
+
+logger = get_logger("MAIN")
 
 # Scanner filter constants
 MIN_PRICE = 2.0
@@ -73,32 +81,29 @@ def main():
     """Main entry point."""
     args = parse_args()
     
-    print("=" * 60)
-    print("  LIVE DAY TRADING - Bull Flag Strategy")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  LIVE DAY TRADING - Bull Flag Strategy")
+    logger.info("=" * 60)
     
     # Display mode
     if args.live:
-        print("\n⚠️  LIVE TRADING MODE - REAL MONEY ⚠️")
-        print("Press Ctrl+C within 5 seconds to cancel...")
+        logger.warning("LIVE TRADING MODE - REAL MONEY")
+        logger.info("Press Ctrl+C within 5 seconds to cancel...")
         try:
-            import time
             time.sleep(5)
         except KeyboardInterrupt:
-            print("\nCancelled by user")
+            logger.info("Cancelled by user")
             sys.exit(0)
     else:
-        print("\n📝 PAPER TRADING MODE (simulated)")
-    
-    print()
+        logger.info("PAPER TRADING MODE (simulated)")
     
     # Create Schwab client with auto-refresh
     try:
-        client_wrapper = AutoRefreshClient()
+        client_wrapper = AutoRefreshSchwabClient()
     except Exception as e:
-        print(f"❌ Authentication failed: {e}")
-        print("\nPlease check your credentials in config.py")
-        print("You may need to re-authenticate via browser")
+        logger.error(f"Authentication failed: {e}")
+        logger.info("Please check your credentials in client/config.py")
+        logger.info("You may need to re-authenticate via browser")
         sys.exit(1)
     
     # Create provider (uses current client)
@@ -116,33 +121,33 @@ def main():
     # Get symbols to trade
     if args.skip_scan:
         if not args.symbols:
-            print("❌ Error: --skip-scan requires --symbols")
+            logger.error("--skip-scan requires --symbols")
             sys.exit(1)
         symbols = args.symbols
-        print(f"Using provided symbols: {symbols}")
+        logger.info(f"Using provided symbols: {symbols}")
     else:
         # Run scanner
-        print("\n--- Running Live Momentum Scanner ---")
-        print(f"Filters: min price ${MIN_PRICE}, gap >= 3%, volume 5x")
+        logger.info("--- Running Live Momentum Scanner ---")
+        logger.info(f"Filters: min price ${MIN_PRICE}, gap >= 3%, volume 5x")
         symbols = run_scanner(provider)
         
         if not symbols:
-            print("\n❌ No stocks passed the scanner criteria")
-            print("Try again tomorrow or use --skip-scan with specific symbols")
+            logger.warning("No stocks passed the scanner criteria")
+            logger.info("Try again tomorrow or use --skip-scan with specific symbols")
             sys.exit(0)
     
-    print(f"\n📊 Trading {len(symbols)} symbols: {symbols}")
+    logger.info(f"Trading {len(symbols)} symbols: {symbols}")
     
     # Run trading session
-    print("\n--- Starting Live Trading Session ---")
+    logger.info("--- Starting Live Trading Session ---")
     engine = LiveTradingEngine(client_wrapper, broker, symbols)
     try:
         engine.start()
     except Exception as e:
-        print(f"\n❌ Trading session error: {e}")
+        logger.error(f"Trading session error: {e}")
         raise
     
-    print("\n--- Session Complete ---")
+    logger.info("--- Session Complete ---")
     
     # Final summary for paper trading
     if not args.live and hasattr(broker, 'print_summary'):

@@ -14,8 +14,12 @@ from schwab.client import Client
 
 from broker.interfaces import IBroker, OrderSide, OrderType
 from strategy.bull_flag_live import BullFlagLiveStrategy, Candle, Signal, StrategyState
-from utils import AutoRefreshClient
+from client import AutoRefreshSchwabClient
+from logger import get_logger
 import httpx
+
+
+logger = get_logger("ENGINE")
 
 
 class LiveTradingEngine:
@@ -36,7 +40,7 @@ class LiveTradingEngine:
     
     def __init__(
         self,
-        client_wrapper: AutoRefreshClient,
+        client_wrapper: AutoRefreshSchwabClient,
         broker: IBroker,
         symbols: List[str]
     ):
@@ -44,7 +48,7 @@ class LiveTradingEngine:
         Initialize LiveTradingEngine.
         
         Args:
-            client_wrapper: AutoRefreshClient that manages token refresh
+            client_wrapper: AutoRefreshSchwabClient that manages token refresh
             broker: IBroker implementation (PaperBroker or SchwabBroker)
             symbols: List of symbols to trade
         """
@@ -63,17 +67,12 @@ class LiveTradingEngine:
                 on_signal=self._handle_signal
             )
         
-        self._log(f"Engine initialized for {len(symbols)} symbols")
+        logger.info(f"Engine initialized for {len(symbols)} symbols")
     
     @property
     def client(self) -> Client:
         """Get the current Schwab client (auto-refreshes if needed)."""
         return self.client_wrapper.client
-    
-    def _log(self, message: str):
-        """Log with timestamp (Eastern time)."""
-        timestamp = datetime.now(self.ET).strftime("%H:%M:%S")
-        print(f"[{timestamp}] [ENGINE] {message}")
     
     def _handle_signal(self, signal: Signal):
         """
@@ -81,7 +80,7 @@ class LiveTradingEngine:
         
         Routes the signal to the broker for execution.
         """
-        self._log(f"Signal received: {signal.action} {signal.symbol} @ ${signal.price:.2f}")
+        logger.info(f"Signal received: {signal.action} {signal.symbol} @ ${signal.price:.2f}")
         
         try:
             if signal.action == "BUY":
@@ -91,7 +90,7 @@ class LiveTradingEngine:
                 quantity = int(max_position_value / signal.price)
                 
                 if quantity < 1:
-                    self._log(f"Insufficient buying power for {signal.symbol}")
+                    logger.info(f"Insufficient buying power for {signal.symbol}")
                     return
                 
                 order_id = self.broker.place_order(
@@ -101,14 +100,14 @@ class LiveTradingEngine:
                     order_type=OrderType.LIMIT,
                     limit_price=signal.price
                 )
-                self._log(f"BUY order placed: {order_id} for {quantity} shares")
+                logger.info(f"BUY order placed: {order_id} for {quantity} shares")
                 
             elif signal.action == "SELL":
                 # Get current position
                 position = self.broker.get_position(signal.symbol)
                 
                 if position is None or position.quantity <= 0:
-                    self._log(f"No position to sell for {signal.symbol}")
+                    logger.info(f"No position to sell for {signal.symbol}")
                     return
                 
                 order_id = self.broker.place_order(
@@ -118,10 +117,10 @@ class LiveTradingEngine:
                     order_type=OrderType.LIMIT,
                     limit_price=signal.price
                 )
-                self._log(f"SELL order placed: {order_id} for {position.quantity} shares")
+                logger.info(f"SELL order placed: {order_id} for {position.quantity} shares")
                 
         except Exception as e:
-            self._log(f"Error executing signal: {e}")
+            logger.info(f"Error executing signal: {e}")
     
     def _needs_realtime_polling(self) -> bool:
         """Check if any strategy needs real-time price monitoring."""
@@ -143,7 +142,7 @@ class LiveTradingEngine:
             resp = self.client.get_quotes(symbols)
             
             if resp.status_code != httpx.codes.OK:
-                self._log(f"Failed to get quotes: {resp.status_code}")
+                logger.info(f"Failed to get quotes: {resp.status_code}")
                 return prices
             
             data = resp.json()
@@ -155,7 +154,7 @@ class LiveTradingEngine:
                     prices[symbol] = float(quote["lastPrice"])
                     
         except Exception as e:
-            self._log(f"Error fetching quotes: {e}")
+            logger.info(f"Error fetching quotes: {e}")
         
         return prices
     
@@ -185,7 +184,7 @@ class LiveTradingEngine:
             )
             
             if resp.status_code != httpx.codes.OK:
-                self._log(f"Failed to get candles for {symbol}: {resp.status_code}")
+                logger.info(f"Failed to get candles for {symbol}: {resp.status_code}")
                 return []
             
             data = resp.json()
@@ -224,7 +223,7 @@ class LiveTradingEngine:
             return result
             
         except Exception as e:
-            self._log(f"Error fetching candles for {symbol}: {e}")
+            logger.info(f"Error fetching candles for {symbol}: {e}")
             return []
     
     def _process_candles(self, num_candles: int = 1):
@@ -232,7 +231,7 @@ class LiveTradingEngine:
         for symbol in self.symbols:
             candles = self._fetch_candles(symbol, num_candles)
             for candle in candles:
-                self._log(
+                logger.info(
                     f"{symbol}: O={candle.open:.2f} H={candle.high:.2f} "
                     f"L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}"
                 )
@@ -272,7 +271,7 @@ class LiveTradingEngine:
         
         Runs a polling loop until stopped or market close.
         """
-        self._log("Starting live trading engine...")
+        logger.info("Starting live trading engine...")
         self.running = True
         
         last_candle_slot = 5  # Slot 5 = :25 minute mark, ensures we catch candles from market open
@@ -283,7 +282,7 @@ class LiveTradingEngine:
                 
                 # Check if market is closed (4:00 PM ET)
                 if now_et.time() >= dt_time(16, 0):
-                    self._log("Market closed - stopping engine")
+                    logger.info("Market closed - stopping engine")
                     break
                 
                 # Poll candles at each 5-minute boundary (e.g., :00, :05, :10...)
@@ -308,20 +307,20 @@ class LiveTradingEngine:
                     time.sleep(max(1, sleep_time))
                     
         except KeyboardInterrupt:
-            self._log("Interrupted by user")
+            logger.info("Interrupted by user")
         except Exception as e:
-            self._log(f"Engine error: {e}")
+            logger.info(f"Engine error: {e}")
             raise
         finally:
             self.stop()
     
     def stop(self):
         """Stop the live trading engine."""
-        self._log("Stopping engine...")
+        logger.info("Stopping engine...")
         self.running = False
         
         # Print broker summary
         if hasattr(self.broker, 'print_summary'):
             self.broker.print_summary()
         
-        self._log("Engine stopped")
+        logger.info("Engine stopped")

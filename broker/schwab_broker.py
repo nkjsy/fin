@@ -20,11 +20,14 @@ from schwab.utils import Utils
 from broker.interfaces import (
     IBroker, Order, Position, OrderType, OrderSide, OrderStatus
 )
-import config
+from client import config
+from logger import get_logger
 
 
 # Eastern timezone for market hours
 ET = ZoneInfo("America/New_York")
+
+logger = get_logger("SCHWAB")
 
 
 class SchwabBroker(IBroker):
@@ -46,7 +49,7 @@ class SchwabBroker(IBroker):
         self.client = client
         self.account_hash = account_hash or self._get_account_hash()
         
-        print(f"[SCHWAB] Broker initialized for account {self.account_hash[:8]}...")
+        logger.info(f"Broker initialized for account {self.account_hash[:8]}...")
     
     def _get_account_hash(self) -> str:
         """Get the account hash for the first linked account."""
@@ -67,11 +70,6 @@ class SchwabBroker(IBroker):
         
         # Otherwise, use first account
         return accounts[0]["hashValue"]
-    
-    def _log(self, message: str):
-        """Log a message with timestamp (Eastern time)."""
-        timestamp = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[SCHWAB] {timestamp} | {message}")
     
     def place_order(
         self,
@@ -117,36 +115,36 @@ class SchwabBroker(IBroker):
                 raise ValueError(f"Order type {order_type} not yet implemented for SELL")
         
         # Place order
-        self._log(f"Placing order: {side.value} {quantity} {symbol} {order_type.value}")
+        logger.info(f"Placing order: {side.value} {quantity} {symbol} {order_type.value}")
         
         resp = self.client.place_order(self.account_hash, order_spec)
         
         if resp.status_code not in [httpx.codes.OK, httpx.codes.CREATED]:
-            self._log(f"Order failed: {resp.status_code} - {resp.text}")
+            logger.info(f"Order failed: {resp.status_code} - {resp.text}")
             raise RuntimeError(f"Order placement failed: {resp.status_code}")
         
         # Extract order ID from response
         order_id = Utils.extract_order_id(resp)
         
-        self._log(f"Order placed successfully: {order_id}")
+        logger.info(f"Order placed successfully: {order_id}")
         return str(order_id)
     
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an order."""
-        self._log(f"Cancelling order: {order_id}")
+        logger.info(f"Cancelling order: {order_id}")
         
         try:
             resp = self.client.cancel_order(order_id, self.account_hash)
             
             if resp.status_code == httpx.codes.OK:
-                self._log(f"Order {order_id} cancelled")
+                logger.info(f"Order {order_id} cancelled")
                 return True
             else:
-                self._log(f"Cancel failed: {resp.status_code}")
+                logger.info(f"Cancel failed: {resp.status_code}")
                 return False
                 
         except Exception as e:
-            self._log(f"Cancel error: {e}")
+            logger.info(f"Cancel error: {e}")
             return False
     
     def get_order_status(self, order_id: str) -> Optional[Order]:
@@ -202,7 +200,7 @@ class SchwabBroker(IBroker):
             )
             
         except Exception as e:
-            self._log(f"Error getting order status: {e}")
+            logger.info(f"Error getting order status: {e}")
             return None
     
     def get_positions(self) -> List[Position]:
@@ -214,7 +212,7 @@ class SchwabBroker(IBroker):
             )
             
             if resp.status_code != httpx.codes.OK:
-                self._log(f"Failed to get positions: {resp.status_code}")
+                logger.info(f"Failed to get positions: {resp.status_code}")
                 return []
             
             data = resp.json()
@@ -237,7 +235,7 @@ class SchwabBroker(IBroker):
             return positions
             
         except Exception as e:
-            self._log(f"Error getting positions: {e}")
+            logger.info(f"Error getting positions: {e}")
             return []
     
     def get_position(self, symbol: str) -> Optional[Position]:
@@ -254,7 +252,7 @@ class SchwabBroker(IBroker):
             resp = self.client.get_account(self.account_hash)
             
             if resp.status_code != httpx.codes.OK:
-                self._log(f"Failed to get account: {resp.status_code}")
+                logger.info(f"Failed to get account: {resp.status_code}")
                 return {"cash": 0, "buying_power": 0, "equity": 0, "unrealized_pnl": 0}
             
             data = resp.json()
@@ -268,7 +266,7 @@ class SchwabBroker(IBroker):
             }
             
         except Exception as e:
-            self._log(f"Error getting account balance: {e}")
+            logger.info(f"Error getting account balance: {e}")
             return {"cash": 0, "buying_power": 0, "equity": 0, "unrealized_pnl": 0}
     
     def get_buying_power(self) -> float:

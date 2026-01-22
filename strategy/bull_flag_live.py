@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pandas_ta as ta
 
+from logger import get_logger
+
 
 # Eastern timezone for market hours
 ET = ZoneInfo("America/New_York")
@@ -144,11 +146,13 @@ class BullFlagLiveStrategy:
         
         # Previous candle
         self.prev_candle: Optional[Candle] = None
+        
+        # Per-symbol logger
+        self._logger = get_logger(self.symbol)
     
     def _log(self, message: str):
-        """Log with timestamp and symbol (Eastern time)."""
-        timestamp = datetime.now(ET).strftime("%H:%M:%S")
-        print(f"[{timestamp}] [{self.symbol}] {message}")
+        """Log with symbol prefix."""
+        self._logger.info(message)
     
     def _calculate_ema(self) -> Optional[float]:
         """Calculate current EMA from candle history."""

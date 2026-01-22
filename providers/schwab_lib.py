@@ -10,12 +10,14 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import httpx
 
-from schwab.auth import easy_client
 from schwab.client import Client
 
 from providers.interfaces import IDataProvider
-import config
 from utils import calculate_start_date
+from logger import get_logger
+
+
+logger = get_logger("PROVIDER")
 
 
 class SchwabProvider(IDataProvider):
@@ -24,28 +26,19 @@ class SchwabProvider(IDataProvider):
     
     Implements synchronous methods for compatibility with existing scanner architecture.
     For streaming data, use the StreamClient directly in live_engine.py.
+    
+    IMPORTANT: Always use AutoRefreshSchwabClient to create the client to ensure
+    automatic token refresh. Do not create clients directly with easy_client().
     """
     
-    def __init__(self, client: Client = None):
+    def __init__(self, client: Client):
         """
         Initialize SchwabProvider.
         
         Args:
-            client: Optional pre-configured schwab Client. If None, creates one using config.
+            client: A schwab Client obtained from AutoRefreshSchwabClient.client property.
         """
-        if client is not None:
-            self.client = client
-        else:
-            self.client = self._create_client()
-    
-    def _create_client(self) -> Client:
-        """Create a Schwab client using credentials from config."""
-        return easy_client(
-            api_key=config.SCHWAB_API_KEY,
-            app_secret=config.SCHWAB_APP_SECRET,
-            callback_url=config.SCHWAB_CALLBACK_URL,
-            token_path=config.SCHWAB_TOKEN_PATH
-        )
+        self.client = client
     
     def get_history(self, ticker: str, interval: str, period: str = "max", end_date: str = None) -> pd.DataFrame:
         """
@@ -75,7 +68,7 @@ class SchwabProvider(IDataProvider):
             resp = self._fetch_price_history(ticker, interval, start_dt, end_dt)
             
             if resp.status_code != httpx.codes.OK:
-                print(f"Error fetching {ticker}: {resp.status_code}")
+                logger.error(f"Error fetching {ticker}: {resp.status_code}")
                 return pd.DataFrame()
             
             data = resp.json()
@@ -85,7 +78,7 @@ class SchwabProvider(IDataProvider):
             return df
             
         except Exception as e:
-            print(f"Error fetching {ticker}: {e}")
+            logger.error(f"Error fetching {ticker}: {e}")
             return pd.DataFrame()
     
     def _fetch_price_history(self, ticker: str, interval: str, start_dt: datetime, end_dt: datetime):

@@ -13,10 +13,13 @@ from zoneinfo import ZoneInfo
 from broker.interfaces import (
     IBroker, Order, Position, OrderType, OrderSide, OrderStatus
 )
+from logger import get_logger
 
 
 # Eastern timezone for market hours
 ET = ZoneInfo("America/New_York")
+
+logger = get_logger("PAPER")
 
 
 class PaperBroker(IBroker):
@@ -41,12 +44,7 @@ class PaperBroker(IBroker):
         self.orders: Dict[str, Order] = {}
         self.trade_log: List[dict] = []
         
-        self._log(f"PaperBroker initialized with ${initial_cash:,.2f}")
-    
-    def _log(self, message: str):
-        """Log a message with timestamp (Eastern time)."""
-        timestamp = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[PAPER] {timestamp} | {message}")
+        logger.info(f"PaperBroker initialized with ${initial_cash:,.2f}")
     
     def _generate_order_id(self) -> str:
         """Generate a unique order ID."""
@@ -91,7 +89,7 @@ class PaperBroker(IBroker):
         if stop_price:
             price_info += f" (stop: ${stop_price:.2f})"
         
-        self._log(
+        logger.info(
             f"ORDER {order_id}: {side.value} {quantity} {symbol} "
             f"{order_type.value}{price_info}"
         )
@@ -125,7 +123,7 @@ class PaperBroker(IBroker):
             self.cash += total_cost
             self._update_position_sell(order.symbol, order.quantity, fill_price)
         
-        self._log(
+        logger.info(
             f"FILLED {order_id}: {order.side.value} {order.quantity} {order.symbol} "
             f"@ ${fill_price:.2f} (Total: ${total_cost:,.2f})"
         )
@@ -175,7 +173,7 @@ class PaperBroker(IBroker):
         if pos.quantity == 0:
             # Position closed
             realized_pnl = (price - pos.average_price) * quantity
-            self._log(f"POSITION CLOSED: {symbol} | Realized P&L: ${realized_pnl:,.2f}")
+            logger.info(f"POSITION CLOSED: {symbol} | Realized P&L: ${realized_pnl:,.2f}")
             del self.positions[symbol]
         elif pos.quantity < 0:
             # Went short
@@ -184,17 +182,17 @@ class PaperBroker(IBroker):
     def cancel_order(self, order_id: str) -> bool:
         """Cancel a pending order."""
         if order_id not in self.orders:
-            self._log(f"CANCEL FAILED: Order {order_id} not found")
+            logger.info(f"CANCEL FAILED: Order {order_id} not found")
             return False
         
         order = self.orders[order_id]
         
         if order.status in [OrderStatus.FILLED, OrderStatus.CANCELLED]:
-            self._log(f"CANCEL FAILED: Order {order_id} already {order.status.value}")
+            logger.info(f"CANCEL FAILED: Order {order_id} already {order.status.value}")
             return False
         
         order.status = OrderStatus.CANCELLED
-        self._log(f"CANCELLED: Order {order_id}")
+        logger.info(f"CANCELLED: Order {order_id}")
         return True
     
     def get_order_status(self, order_id: str) -> Optional[Order]:
@@ -253,20 +251,20 @@ class PaperBroker(IBroker):
         """Print account summary."""
         balance = self.get_account_balance()
         
-        self._log("=" * 50)
-        self._log("ACCOUNT SUMMARY")
-        self._log(f"  Cash:          ${balance['cash']:>12,.2f}")
-        self._log(f"  Equity:        ${balance['equity']:>12,.2f}")
-        self._log(f"  Unrealized PnL:${balance['unrealized_pnl']:>12,.2f}")
-        self._log(f"  Realized PnL:  ${balance['realized_pnl']:>12,.2f}")
+        logger.info("=" * 50)
+        logger.info("ACCOUNT SUMMARY")
+        logger.info(f"  Cash:          ${balance['cash']:>12,.2f}")
+        logger.info(f"  Equity:        ${balance['equity']:>12,.2f}")
+        logger.info(f"  Unrealized PnL:${balance['unrealized_pnl']:>12,.2f}")
+        logger.info(f"  Realized PnL:  ${balance['realized_pnl']:>12,.2f}")
         
         if self.positions:
-            self._log("-" * 50)
-            self._log("POSITIONS:")
+            logger.info("-" * 50)
+            logger.info("POSITIONS:")
             for pos in self.positions.values():
-                self._log(
+                logger.info(
                     f"  {pos.symbol}: {pos.quantity} @ ${pos.average_price:.2f} "
                     f"(current: ${pos.current_price:.2f})"
                 )
         
-        self._log("=" * 50)
+        logger.info("=" * 50)

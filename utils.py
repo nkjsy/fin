@@ -7,8 +7,11 @@ from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 from schwab.client import Client
 import httpx
-from schwab.auth import easy_client
-import config
+from client import AutoRefreshSchwabClient
+from logger import get_logger
+
+
+logger = get_logger("UTILS")
 
 
 def get_float_shares(symbol: str) -> int | None:
@@ -37,11 +40,11 @@ def wait_for_market_open(client):
     now = datetime.now(ET)
     
     # Fetch market hours from Schwab API
-    print("Fetching market hours from Schwab...")
+    logger.info("Fetching market hours from Schwab...")
     resp = client.get_market_hours(Client.MarketHours.Market.EQUITY, date=now.date())
     
     if resp.status_code != httpx.codes.OK:
-        print(f"⚠️  Failed to get market hours (status {resp.status_code}), using defaults")
+        logger.warning(f"Failed to get market hours (status {resp.status_code}), using defaults")
         # Fallback to hardcoded hours
         market_open = dt_time(9, 30)
         market_close = dt_time(16, 0)
@@ -54,8 +57,8 @@ def wait_for_market_open(client):
         
         if not market_info.get("isOpen", False):
             # Market is closed (weekend/holiday)
-            print(f"Market is closed today ({now.strftime('%A, %B %d, %Y')})")
-            print("This could be a weekend or market holiday.")
+            logger.info(f"Market is closed today ({now.strftime('%A, %B %d, %Y')})")
+            logger.info("This could be a weekend or market holiday.")
             sys.exit(0)
         
         # Parse session hours (format: "2024-01-15T09:30:00-05:00")
@@ -63,7 +66,7 @@ def wait_for_market_open(client):
         regular_market = session_hours.get("regularMarket", [])
         
         if not regular_market:
-            print("Could not find regular market hours in API response")
+            logger.error("Could not find regular market hours in API response")
             sys.exit(1)
         
         # Get start and end times
@@ -73,28 +76,28 @@ def wait_for_market_open(client):
         market_open = datetime.fromisoformat(start_str).time()
         market_close = datetime.fromisoformat(end_str).time()
         
-        print(f"Market hours today: {market_open.strftime('%H:%M')} - {market_close.strftime('%H:%M')} ET")
+        logger.info(f"Market hours today: {market_open.strftime('%H:%M')} - {market_close.strftime('%H:%M')} ET")
     
     current_time = now.time()
     
     # Check if market is currently open
     if market_open <= current_time < market_close:
-        print("Market is already open")
+        logger.info("Market is already open")
         return
     
     # Check if market has closed for today
     if current_time >= market_close:
-        print(f"Market is closed for today (closed at {market_close.strftime('%H:%M')} ET, current time: {current_time.strftime('%H:%M')} ET)")
-        print("Please run again tomorrow before market close.")
+        logger.info(f"Market is closed for today (closed at {market_close.strftime('%H:%M')} ET, current time: {current_time.strftime('%H:%M')} ET)")
+        logger.info("Please run again tomorrow before market close.")
         sys.exit(0)
     
     # Check if it's too early
     if current_time < earliest_start:
-        print(f"Too early to start (current time: {current_time.strftime('%H:%M')} ET)")
-        print("Please run again after 8:30 AM ET.")
+        logger.info(f"Too early to start (current time: {current_time.strftime('%H:%M')} ET)")
+        logger.info("Please run again after 8:30 AM ET.")
         sys.exit(0)
     
-    print(f"Waiting for market open at {market_open.strftime('%H:%M')} ET...")
+    logger.info(f"Waiting for market open at {market_open.strftime('%H:%M')} ET...")
     
     while datetime.now(ET).time() < market_open:
         now_et = datetime.now(ET)
@@ -103,14 +106,14 @@ def wait_for_market_open(client):
         
         minutes = remaining.seconds // 60
         if minutes > 0:
-            print(f"  {minutes} minutes until market open...")
+            logger.info(f"  {minutes} minutes until market open...")
         
         # Sleep in intervals
         sleep_time = min(60, remaining.seconds)
         if sleep_time > 0:
             time.sleep(sleep_time)
     
-    print("Market is open!")
+    logger.info("Market is open!")
 
 
 def wait_until_time(hour: int, minute: int, description: str = None):
@@ -132,121 +135,23 @@ def wait_until_time(hour: int, minute: int, description: str = None):
     time_str = f"{hour}:{minute:02d} AM" if hour < 12 else f"{hour-12 if hour > 12 else 12}:{minute:02d} PM"
     
     if now >= target_time:
-        print(f"Already past {time_str} ET" + (f", proceeding with {description}..." if description else ""))
+        logger.info(f"Already past {time_str} ET" + (f", proceeding with {description}..." if description else ""))
         return False
     
     wait_seconds = (target_time - now).total_seconds()
-    print(f"Waiting until {time_str} ET ({wait_seconds:.0f} seconds)...")
+    logger.info(f"Waiting until {time_str} ET ({wait_seconds:.0f} seconds)...")
     
     # Wait with progress updates
     while datetime.now(ET) < target_time:
         remaining = (target_time - datetime.now(ET)).total_seconds()
         if remaining > 60:
-            print(f"  {remaining/60:.1f} minutes remaining...")
+            logger.info(f"  {remaining/60:.1f} minutes remaining...")
             time.sleep(30)
         else:
             time.sleep(5)
     
-    print(f"{time_str} ET reached" + (f", {description}..." if description else ""))
+    logger.info(f"{time_str} ET reached" + (f", {description}..." if description else ""))
     return True
-
-
-class AutoRefreshClient:
-    """
-    Wrapper around Schwab Client that proactively refreshes the access token.
-    
-    The Schwab access token expires every 30 minutes. While schwab-py handles
-    automatic refresh, it can sometimes fail. This wrapper proactively recreates
-    the client before expiration to ensure uninterrupted operation.
-    
-    Usage:
-        wrapper = AutoRefreshClient()
-        client = wrapper.client  # Use this for API calls
-        
-        # In your main loop, periodically call:
-        wrapper.ensure_fresh()
-    """
-    
-    # Refresh 5 minutes before expiration (25 minutes)
-    ACCESS_TOKEN_REFRESH_SECONDS = 25 * 60
-    
-    # 5.5 days for refresh token (proactive weekly refresh)
-    REFRESH_TOKEN_MAX_AGE_SECONDS = 5.5 * 24 * 60 * 60
-    
-    def __init__(self):
-        """Initialize with a fresh client."""
-        self._client = None
-        self._client_created_at = None
-        self._create_client()
-    
-    @property
-    def client(self) -> Client:
-        """Get the current client, refreshing if needed."""
-        self.ensure_fresh()
-        return self._client
-    
-    def _create_client(self):
-        """Create a new authenticated Schwab client."""
-        print("Authenticating with Schwab...")
-        self._client = easy_client(
-            api_key=config.SCHWAB_API_KEY,
-            app_secret=config.SCHWAB_APP_SECRET,
-            callback_url=config.SCHWAB_CALLBACK_URL,
-            token_path=config.SCHWAB_TOKEN_PATH,
-            max_token_age=self.REFRESH_TOKEN_MAX_AGE_SECONDS
-        )
-        self._client_created_at = time.time()
-        print("Authentication successful")
-    
-    def ensure_fresh(self):
-        """
-        Ensure the client has a fresh access token.
-        
-        Call this periodically (e.g., every polling cycle) to proactively
-        refresh the client before the 30-minute access token expires.
-        """
-        if self._client is None or self._client_created_at is None:
-            self._create_client()
-            return
-        
-        elapsed = time.time() - self._client_created_at
-        if elapsed >= self.ACCESS_TOKEN_REFRESH_SECONDS:
-            print(f"[AutoRefresh] Access token age: {elapsed/60:.1f}min, refreshing...")
-            self._create_client()
-    
-    def force_refresh(self):
-        """Force an immediate client refresh."""
-        print("[AutoRefresh] Forcing client refresh...")
-        self._create_client()
-
-
-def create_client():
-    """
-    Create authenticated Schwab client.
-    
-    Uses max_token_age for proactive token refresh. Per schwab-py docs, tokens
-    expire after 7 days. Setting max_token_age to ~5.5 days ensures the token
-    gets refreshed on Monday mornings if created the previous week.
-    
-    Note: For long-running applications, consider using AutoRefreshClient instead
-    to handle the 30-minute access token expiration.
-    """
-    print("Authenticating with Schwab...")
-    
-    # 5.5 days in seconds - triggers proactive refresh on Monday if token
-    # was created on Tuesday or earlier of the previous week
-    MAX_TOKEN_AGE_SECONDS = 5.5 * 24 * 60 * 60  # 475200 seconds
-    
-    client = easy_client(
-        api_key=config.SCHWAB_API_KEY,
-        app_secret=config.SCHWAB_APP_SECRET,
-        callback_url=config.SCHWAB_CALLBACK_URL,
-        token_path=config.SCHWAB_TOKEN_PATH,
-        max_token_age=MAX_TOKEN_AGE_SECONDS
-    )
-    
-    print("Authentication successful")
-    return client
 
 
 def get_sp500_tickers():
@@ -374,7 +279,7 @@ if __name__ == "__main__":
     # Test calculate_start_date
     print("Testing calculate_start_date...")
     
-    client = create_client()
+    client = AutoRefreshSchwabClient().client
     ET = ZoneInfo("America/New_York")
     
     # Test with today as end date

@@ -1,9 +1,14 @@
 # Data
 data/
 
+# Logs
+logs/
+
 # Credentials
 config.py
+client/config.py
 schwab_token.json
+client/schwab_token.json
 
 # Python
 __pycache__/

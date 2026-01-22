@@ -13,10 +13,19 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 import httpx
 from schwab.client import Client
-from utils import create_client
+from client import AutoRefreshSchwabClient
 from datetime import datetime, timedelta
 from providers.schwab_lib import SchwabProvider
 from scanner.live_momentum import LiveMomentumScanner
+from logger import get_logger
+
+
+logger = get_logger("TEST")
+
+
+def get_client():
+    """Get a Schwab client for testing."""
+    return AutoRefreshSchwabClient().client
 
 
 def test_schwab_fundamentals():
@@ -24,17 +33,17 @@ def test_schwab_fundamentals():
     Test Schwab API fundamentals endpoint to discover available fields.
     Run this to see what fundamental data Schwab provides.
     """
-    print("=" * 60)
-    print("Testing Schwab Fundamentals API")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Testing Schwab Fundamentals API")
+    logger.info("=" * 60)
     
     # Create client
-    client = create_client()
+    client = get_client()
     
     # Test symbols
     test_symbols = ["AAPL", "MSFT", "TSLA"]
     
-    print(f"\nFetching fundamentals for: {test_symbols}")
+    logger.info(f"Fetching fundamentals for: {test_symbols}")
     
     resp = client.get_instruments(
         test_symbols,
@@ -42,54 +51,54 @@ def test_schwab_fundamentals():
     )
     
     if resp.status_code != httpx.codes.OK:
-        print(f"Error: {resp.status_code}")
-        print(resp.text)
+        logger.error(f"Error: {resp.status_code}")
+        logger.error(resp.text)
         return
     
     data = resp.json()
     
     # Print raw response structure
-    print(f"\nResponse keys: {data.keys()}")
+    logger.info(f"Response keys: {data.keys()}")
     
     instruments = data.get("instruments", [])
-    print(f"Number of instruments: {len(instruments)}")
+    logger.info(f"Number of instruments: {len(instruments)}")
     
     for inst in instruments:
         symbol = inst.get("symbol")
         fundamental = inst.get("fundamental", {})
         
-        print(f"\n{'='*40}")
-        print(f"Symbol: {symbol}")
-        print(f"{'='*40}")
+        logger.info(f"{'='*40}")
+        logger.info(f"Symbol: {symbol}")
+        logger.info(f"{'='*40}")
         
         # Print all fundamental fields
-        print(f"\nAvailable fundamental fields ({len(fundamental)} total):")
+        logger.info(f"Available fundamental fields ({len(fundamental)} total):")
         for key in sorted(fundamental.keys()):
             value = fundamental[key]
-            print(f"  {key}: {value}")
+            logger.info(f"  {key}: {value}")
         
         # Specifically look for float-related fields
-        print(f"\nFloat-related fields:")
+        logger.info(f"Float-related fields:")
         float_keywords = ['float', 'shares', 'outstanding', 'market']
         for key, value in fundamental.items():
             if any(kw in key.lower() for kw in float_keywords):
-                print(f"  {key}: {value}")
+                logger.info(f"  {key}: {value}")
 
 
 def test_schwab_movers():
     """
     Test Schwab API movers endpoint.
     """
-    print("=" * 60)
-    print("Testing Schwab Movers API")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Testing Schwab Movers API")
+    logger.info("=" * 60)
     
-    client = create_client()
+    client = get_client()
     
     indices = ["NASDAQ", "NYSE", "$DJI", "$COMPX", "$SPX"]
     
     for index in indices:
-        print(f"\n--- {index} ---")
+        logger.info(f"--- {index} ---")
         try:
             index_map = {
                 "NASDAQ": Client.Movers.Index.NASDAQ,
@@ -106,34 +115,34 @@ def test_schwab_movers():
             )
             
             if resp.status_code != httpx.codes.OK:
-                print(f"  Error: {resp.status_code}")
+                logger.error(f"  Error: {resp.status_code}")
                 continue
             
             data = resp.json()
             movers = data.get("screeners", [])[:3]  # Top 3 for debug
             
             if not movers:
-                print("  No movers found.")
+                logger.info("  No movers found.")
                 continue
             
             for m in movers:
-                print(f"\n  --- {m.get('symbol', '?')} ---")
+                logger.info(f"  --- {m.get('symbol', '?')} ---")
                 for key, value in m.items():
-                    print(f"    {key}: {value}")
+                    logger.info(f"    {key}: {value}")
                 
         except Exception as e:
-            print(f"  Error: {e}")
+            logger.error(f"  Error: {e}")
 
 
 def test_live_scanner():
     """
     Test the full LiveMomentumScanner with mocked time (9:41 AM ET).
     """
-    print("=" * 60)
-    print("Testing Live Momentum Scanner")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Testing Live Momentum Scanner")
+    logger.info("=" * 60)
     
-    client = create_client()
+    client = get_client()
     provider = SchwabProvider(client)
     scanner = LiveMomentumScanner(provider)
     
@@ -149,51 +158,51 @@ def test_live_scanner():
         
         symbols = scanner.scan(min_price=2.0)
     
-    print(f"\nScanner returned {len(symbols)} symbols: {symbols}")
+    logger.info(f"Scanner returned {len(symbols)} symbols: {symbols}")
 
 
 def test_schwab_quotes():
     """
     Test Schwab API quotes endpoint.
     """
-    print("=" * 60)
-    print("Testing Schwab Quotes API")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Testing Schwab Quotes API")
+    logger.info("=" * 60)
     
-    client = create_client()
+    client = get_client()
     
     test_symbols = ["AAPL", "MSFT", "TSLA", "NVDA"]
     
-    print(f"\nFetching quotes for: {test_symbols}")
+    logger.info(f"Fetching quotes for: {test_symbols}")
     
     resp = client.get_quotes(test_symbols)
     
     if resp.status_code != httpx.codes.OK:
-        print(f"Error: {resp.status_code}")
+        logger.error(f"Error: {resp.status_code}")
         return
     
     data = resp.json()
     
     for symbol, quote_data in data.items():
         quote = quote_data.get("quote", {})
-        print(f"\n--- {symbol} ---")
+        logger.info(f"--- {symbol} ---")
         # Show all fields to find gap-related ones
         for key, value in sorted(quote.items()):
-            print(f"  {key}: {value}")
+            logger.info(f"  {key}: {value}")
 
 
 def test_schwab_history():
     """
     Test Schwab API price history endpoint.
     """
-    print("=" * 60)
-    print("Testing Schwab Price History API")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Testing Schwab Price History API")
+    logger.info("=" * 60)
     
-    client = create_client()
+    client = get_client()
     
     symbol = "AAPL"
-    print(f"\nFetching 5-minute candles for {symbol}...")
+    logger.info(f"Fetching 5-minute candles for {symbol}...")
     
     now_et = datetime.now(ZoneInfo("America/New_York"))
     market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -205,30 +214,30 @@ def test_schwab_history():
     )
     
     if resp.status_code != httpx.codes.OK:
-        print(f"Error: {resp.status_code}")
+        logger.error(f"Error: {resp.status_code}")
         return
     
     data = resp.json()
     candles = data.get("candles", [])
     
-    print(f"Received {len(candles)} candles")
+    logger.info(f"Received {len(candles)} candles")
     
     # Show last 5 candles
-    print(f"\nLast 5 candles:")
+    logger.info(f"Last 5 candles:")
     for c in candles:
         dt = datetime.fromtimestamp(c["datetime"] / 1000, tz=ZoneInfo("America/New_York"))
-        print(f"  {dt}: O={c['open']:.2f} H={c['high']:.2f} L={c['low']:.2f} C={c['close']:.2f} V={c['volume']:,}")
+        logger.info(f"  {dt}: O={c['open']:.2f} H={c['high']:.2f} L={c['low']:.2f} C={c['close']:.2f} V={c['volume']:,}")
 
 
 def test_volume_confirmation():
     """
     Test the volume confirmation logic in LiveMomentumScanner.
     """
-    print("=" * 60)
-    print("Testing Volume Confirmation")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Testing Volume Confirmation")
+    logger.info("=" * 60)
     
-    client = create_client()
+    client = get_client()
     provider = SchwabProvider(client)
     scanner = LiveMomentumScanner(provider)
     
@@ -236,9 +245,8 @@ def test_volume_confirmation():
     test_symbols = ["AAPL", "TSLA", "CRVS"]
     
     for symbol in test_symbols:
-        print(f"\n{symbol}: ", end="")
         result = scanner._confirm_volume(symbol)
-        print(f"{'CONFIRMED' if result else 'NOT CONFIRMED'}")
+        logger.info(f"{symbol}: {'CONFIRMED' if result else 'NOT CONFIRMED'}")
 
 
 def test_volume_debug():
@@ -247,20 +255,20 @@ def test_volume_debug():
     """
     from datetime import time as dt_time
     
-    print("=" * 60)
-    print("Debugging Volume Data")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Debugging Volume Data")
+    logger.info("=" * 60)
     
-    client = create_client()
+    client = get_client()
     provider = SchwabProvider(client)
     
     symbol = "AAPL"
-    print(f"\nFetching 5-minute candles for {symbol}...")
+    logger.info(f"Fetching 5-minute candles for {symbol}...")
     
     df = provider.get_history(symbol, interval="minute5", period="2d")
     
     if df.empty:
-        print("No data!")
+        logger.warning("No data!")
         return
     
     df["Date"] = df["Datetime"].dt.date
@@ -270,23 +278,23 @@ def test_volume_debug():
     today = dates[-1]
     yesterday = dates[-2]
     
-    print(f"\nToday: {today}, Yesterday: {yesterday}")
+    logger.info(f"Today: {today}, Yesterday: {yesterday}")
     
     # Show all candles in the 9:30-9:45 window for both days
     start_time = dt_time(9, 25)
     end_time = dt_time(9, 50)
     
     for date in [yesterday, today]:
-        print(f"\n--- {date} (9:25-9:50 window) ---")
+        logger.info(f"--- {date} (9:25-9:50 window) ---")
         mask = (df["Date"] == date) & (df["Time"] >= start_time) & (df["Time"] < end_time)
         window_df = df[mask]
         for _, row in window_df.iterrows():
-            print(f"  {row['Datetime']} - Volume: {row['Volume']:,}")
+            logger.info(f"  {row['Datetime']} - Volume: {row['Volume']:,}")
         
         # Sum 9:30-9:40
         sum_mask = (df["Date"] == date) & (df["Time"] >= dt_time(9, 30)) & (df["Time"] < dt_time(9, 40))
         total = df[sum_mask]["Volume"].sum()
-        print(f"  SUM (9:30-9:40): {total:,}")
+        logger.info(f"  SUM (9:30-9:40): {total:,}")
     
     # Print full day volume table and sum
     # for date in [yesterday, today]:
@@ -317,15 +325,15 @@ if __name__ == "__main__":
         test_name = sys.argv[1]
         if test_name == "all":
             for name, func in tests.items():
-                print(f"\n\n{'#' * 60}")
-                print(f"# Running: {name}")
-                print(f"{'#' * 60}\n")
+                logger.info(f"{'#' * 60}")
+                logger.info(f"# Running: {name}")
+                logger.info(f"{'#' * 60}")
                 func()
         elif test_name in tests:
             tests[test_name]()
         else:
-            print(f"Unknown test: {test_name}")
-            print(f"Available tests: {', '.join(tests.keys())}, all")
+            logger.error(f"Unknown test: {test_name}")
+            logger.info(f"Available tests: {', '.join(tests.keys())}, all")
     else:
-        print("Usage: python test_live.py <test_name>")
-        print(f"Available tests: {', '.join(tests.keys())}, all")
+        logger.info("Usage: python test_live.py <test_name>")
+        logger.info(f"Available tests: {', '.join(tests.keys())}, all")
