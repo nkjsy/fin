@@ -151,6 +151,75 @@ def wait_until_time(hour: int, minute: int, description: str = None):
     return True
 
 
+class AutoRefreshClient:
+    """
+    Wrapper around Schwab Client that proactively refreshes the access token.
+    
+    The Schwab access token expires every 30 minutes. While schwab-py handles
+    automatic refresh, it can sometimes fail. This wrapper proactively recreates
+    the client before expiration to ensure uninterrupted operation.
+    
+    Usage:
+        wrapper = AutoRefreshClient()
+        client = wrapper.client  # Use this for API calls
+        
+        # In your main loop, periodically call:
+        wrapper.ensure_fresh()
+    """
+    
+    # Refresh 5 minutes before expiration (25 minutes)
+    ACCESS_TOKEN_REFRESH_SECONDS = 25 * 60
+    
+    # 5.5 days for refresh token (proactive weekly refresh)
+    REFRESH_TOKEN_MAX_AGE_SECONDS = 5.5 * 24 * 60 * 60
+    
+    def __init__(self):
+        """Initialize with a fresh client."""
+        self._client = None
+        self._client_created_at = None
+        self._create_client()
+    
+    @property
+    def client(self) -> Client:
+        """Get the current client, refreshing if needed."""
+        self.ensure_fresh()
+        return self._client
+    
+    def _create_client(self):
+        """Create a new authenticated Schwab client."""
+        print("Authenticating with Schwab...")
+        self._client = easy_client(
+            api_key=config.SCHWAB_API_KEY,
+            app_secret=config.SCHWAB_APP_SECRET,
+            callback_url=config.SCHWAB_CALLBACK_URL,
+            token_path=config.SCHWAB_TOKEN_PATH,
+            max_token_age=self.REFRESH_TOKEN_MAX_AGE_SECONDS
+        )
+        self._client_created_at = time.time()
+        print("Authentication successful")
+    
+    def ensure_fresh(self):
+        """
+        Ensure the client has a fresh access token.
+        
+        Call this periodically (e.g., every polling cycle) to proactively
+        refresh the client before the 30-minute access token expires.
+        """
+        if self._client is None or self._client_created_at is None:
+            self._create_client()
+            return
+        
+        elapsed = time.time() - self._client_created_at
+        if elapsed >= self.ACCESS_TOKEN_REFRESH_SECONDS:
+            print(f"[AutoRefresh] Access token age: {elapsed/60:.1f}min, refreshing...")
+            self._create_client()
+    
+    def force_refresh(self):
+        """Force an immediate client refresh."""
+        print("[AutoRefresh] Forcing client refresh...")
+        self._create_client()
+
+
 def create_client():
     """
     Create authenticated Schwab client.
@@ -158,6 +227,9 @@ def create_client():
     Uses max_token_age for proactive token refresh. Per schwab-py docs, tokens
     expire after 7 days. Setting max_token_age to ~5.5 days ensures the token
     gets refreshed on Monday mornings if created the previous week.
+    
+    Note: For long-running applications, consider using AutoRefreshClient instead
+    to handle the 30-minute access token expiration.
     """
     print("Authenticating with Schwab...")
     

@@ -18,7 +18,7 @@ from scanner.live_momentum import LiveMomentumScanner
 from broker.paper_broker import PaperBroker
 from broker.schwab_broker import SchwabBroker
 from live_engine import LiveTradingEngine
-from utils import wait_for_market_open, create_client
+from utils import wait_for_market_open, AutoRefreshClient
 
 
 # Scanner filter constants
@@ -92,26 +92,26 @@ def main():
     
     print()
     
-    # Create Schwab client
+    # Create Schwab client with auto-refresh
     try:
-        client = create_client()
+        client_wrapper = AutoRefreshClient()
     except Exception as e:
         print(f"❌ Authentication failed: {e}")
         print("\nPlease check your credentials in config.py")
         print("You may need to re-authenticate via browser")
         sys.exit(1)
     
-    # Create provider
-    provider = SchwabProvider(client)
+    # Create provider (uses current client)
+    provider = SchwabProvider(client_wrapper.client)
     
     # Create broker
     if args.live:
-        broker = SchwabBroker(client)
+        broker = SchwabBroker(client_wrapper.client)
     else:
         broker = PaperBroker(initial_cash=args.initial_cash)
     
     # Wait for market open
-    wait_for_market_open(client)
+    wait_for_market_open(client_wrapper.client)
     
     # Get symbols to trade
     if args.skip_scan:
@@ -135,7 +135,7 @@ def main():
     
     # Run trading session
     print("\n--- Starting Live Trading Session ---")
-    engine = LiveTradingEngine(client, broker, symbols)
+    engine = LiveTradingEngine(client_wrapper, broker, symbols)
     try:
         engine.start()
     except Exception as e:

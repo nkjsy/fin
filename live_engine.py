@@ -14,6 +14,7 @@ from schwab.client import Client
 
 from broker.interfaces import IBroker, OrderSide, OrderType
 from strategy.bull_flag_live import BullFlagLiveStrategy, Candle, Signal, StrategyState
+from utils import AutoRefreshClient
 import httpx
 
 
@@ -35,7 +36,7 @@ class LiveTradingEngine:
     
     def __init__(
         self,
-        client: Client,
+        client_wrapper: AutoRefreshClient,
         broker: IBroker,
         symbols: List[str]
     ):
@@ -43,11 +44,11 @@ class LiveTradingEngine:
         Initialize LiveTradingEngine.
         
         Args:
-            client: Authenticated Schwab Client
+            client_wrapper: AutoRefreshClient that manages token refresh
             broker: IBroker implementation (PaperBroker or SchwabBroker)
             symbols: List of symbols to trade
         """
-        self.client = client
+        self.client_wrapper = client_wrapper
         self.broker = broker
         self.symbols = symbols
         
@@ -63,6 +64,11 @@ class LiveTradingEngine:
             )
         
         self._log(f"Engine initialized for {len(symbols)} symbols")
+    
+    @property
+    def client(self) -> Client:
+        """Get the current Schwab client (auto-refreshes if needed)."""
+        return self.client_wrapper.client
     
     def _log(self, message: str):
         """Log with timestamp (Eastern time)."""
@@ -135,6 +141,7 @@ class LiveTradingEngine:
         prices = {}
         try:
             resp = self.client.get_quotes(symbols)
+            
             if resp.status_code != httpx.codes.OK:
                 self._log(f"Failed to get quotes: {resp.status_code}")
                 return prices
