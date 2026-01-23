@@ -94,9 +94,9 @@ class PaperBroker(IBroker):
             f"{order_type.value}{price_info}"
         )
         
-        # For market orders, simulate immediate fill
-        if order_type == OrderType.MARKET:
-            # Use limit_price as fill price if provided, otherwise use a placeholder
+        # For paper trading, simulate immediate fill for MARKET and LIMIT orders
+        # LIMIT orders are filled at the limit price (best-case execution)
+        if order_type in (OrderType.MARKET, OrderType.LIMIT):
             fill_price = limit_price if limit_price else 0.0
             if fill_price > 0:
                 self._fill_order(order_id, fill_price)
