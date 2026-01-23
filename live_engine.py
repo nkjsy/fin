@@ -182,7 +182,6 @@ class LiveTradingEngine:
         
         Args:
             symbol: Stock symbol
-            num_candles: Number of candles to fetch (from most recent)
         
         Returns:
             List of Candles (oldest first), may be empty

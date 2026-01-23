@@ -5,6 +5,10 @@ Usage:
     python test_live.py fundamentals  # Test fundamentals API
     python test_live.py movers        # Test movers API
     python test_live.py scanner       # Test live momentum scanner
+    python test_live.py quotes        # Test quotes API
+    python test_live.py history       # Test price history API
+    python test_live.py volume        # Test volume confirmation
+    python test_live.py debug         # Debug volume data
     python test_live.py all           # Run all tests
 """
 
@@ -224,7 +228,7 @@ def test_schwab_history():
     
     # Show last 5 candles
     logger.info(f"Last 5 candles:")
-    for c in candles:
+    for c in candles[-5:]:
         dt = datetime.fromtimestamp(c["datetime"] / 1000, tz=ZoneInfo("America/New_York"))
         logger.info(f"  {dt}: O={c['open']:.2f} H={c['high']:.2f} L={c['low']:.2f} C={c['close']:.2f} V={c['volume']:,}")
 
