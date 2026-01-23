@@ -78,22 +78,23 @@ class SchwabBroker(IBroker):
         quantity: int,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Optional[float] = None,
-        stop_price: Optional[float] = None
+        stop_price: Optional[float] = None,
+        reason: str = ""
     ) -> str:
-        """
+        '''
         Place an order through Schwab.
-        
         Args:
-            symbol: Ticker symbol
-            side: BUY or SELL
-            quantity: Number of shares
-            order_type: MARKET or LIMIT (STOP orders not yet implemented)
-            limit_price: Limit price for limit orders
-            stop_price: Stop price (not yet implemented)
-            
+                    symbol: Ticker symbol
+                    side: BUY or SELL
+                    quantity: Number of shares
+                    order_type: MARKET or LIMIT (STOP orders not yet implemented)
+                    limit_price: Limit price for limit orders
+                    stop_price: Stop price (not yet implemented)
+                    reason: Reason for the trade (logged only, not sent to Schwab)
+                    
         Returns:
             Order ID as string
-        """
+        '''
         # Build order spec
         if side == OrderSide.BUY:
             if order_type == OrderType.MARKET:

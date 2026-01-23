@@ -78,7 +78,8 @@ class IBroker(ABC):
         quantity: int,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Optional[float] = None,
-        stop_price: Optional[float] = None
+        stop_price: Optional[float] = None,
+        reason: str = ""
     ) -> str:
         """
         Place an order.
@@ -90,6 +91,7 @@ class IBroker(ABC):
             order_type: MARKET, LIMIT, STOP, or STOP_LIMIT
             limit_price: Limit price (required for LIMIT and STOP_LIMIT orders)
             stop_price: Stop price (required for STOP and STOP_LIMIT orders)
+            reason: Reason for the trade (e.g., "Bull flag breakout", "Stop loss hit")
             
         Returns:
             Order ID as string

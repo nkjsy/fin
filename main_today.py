@@ -148,10 +148,6 @@ def main():
         raise
     
     logger.info("--- Session Complete ---")
-    
-    # Final summary for paper trading
-    if not args.live and hasattr(broker, 'print_summary'):
-        broker.print_summary()
 
 
 if __name__ == "__main__":

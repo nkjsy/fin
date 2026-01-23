@@ -102,7 +102,8 @@ class LiveTradingEngine:
                     side=OrderSide.BUY,
                     quantity=quantity,
                     order_type=OrderType.LIMIT,
-                    limit_price=signal.price
+                    limit_price=signal.price,
+                    reason=signal.reason
                 )
                 logger.info(f"BUY order placed: {order_id} for {quantity} shares")
                 
@@ -119,7 +120,8 @@ class LiveTradingEngine:
                     side=OrderSide.SELL,
                     quantity=position.quantity,
                     order_type=OrderType.LIMIT,
-                    limit_price=signal.price
+                    limit_price=signal.price,
+                    reason=signal.reason
                 )
                 logger.info(f"SELL order placed: {order_id} for {position.quantity} shares")
                 

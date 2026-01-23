@@ -57,13 +57,14 @@ class PaperBroker(IBroker):
         quantity: int,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Optional[float] = None,
-        stop_price: Optional[float] = None
+        stop_price: Optional[float] = None,
+        reason: str = ""
     ) -> str:
         """
         Place a simulated order.
         
-        For market orders, simulates immediate fill at limit_price or last known price.
-        For limit/stop orders, order is tracked but not automatically filled.
+        For paper trading, MARKET and LIMIT orders are filled immediately.
+        LIMIT orders are filled at the limit price (best-case execution).
         """
         order_id = self._generate_order_id()
         timestamp = datetime.now(ET).isoformat()
@@ -99,11 +100,11 @@ class PaperBroker(IBroker):
         if order_type in (OrderType.MARKET, OrderType.LIMIT):
             fill_price = limit_price if limit_price else 0.0
             if fill_price > 0:
-                self._fill_order(order_id, fill_price)
+                self._fill_order(order_id, fill_price, reason)
         
         return order_id
     
-    def _fill_order(self, order_id: str, fill_price: float):
+    def _fill_order(self, order_id: str, fill_price: float, reason: str = ""):
         """Simulate filling an order."""
         if order_id not in self.orders:
             return
@@ -136,7 +137,8 @@ class PaperBroker(IBroker):
             "side": order.side.value,
             "quantity": order.quantity,
             "price": fill_price,
-            "total": total_cost
+            "total": total_cost,
+            "reason": reason
         })
     
     def _update_position_buy(self, symbol: str, quantity: int, price: float):
@@ -248,8 +250,58 @@ class PaperBroker(IBroker):
                 pos.unrealized_pnl = pos.quantity * (price - pos.average_price)
     
     def print_summary(self):
-        """Print account summary."""
+        """Print account summary with trade history and win ratio."""
         balance = self.get_account_balance()
+        
+        logger.info("=" * 50)
+        logger.info("TRADE HISTORY")
+        logger.info("-" * 50)
+        
+        # Group trades by symbol to calculate P&L per round trip
+        trades_by_symbol = {}
+        for trade in self.trade_log:
+            symbol = trade["symbol"]
+            if symbol not in trades_by_symbol:
+                trades_by_symbol[symbol] = []
+            trades_by_symbol[symbol].append(trade)
+        
+        # Calculate round-trip P&L and count wins/losses
+        wins = 0
+        losses = 0
+        total_pnl = 0.0
+        
+        for symbol, trades in trades_by_symbol.items():
+            buy_trades = [t for t in trades if t["side"] == "BUY"]
+            sell_trades = [t for t in trades if t["side"] == "SELL"]
+            
+            # Log each trade
+            for trade in trades:
+                side = trade["side"]
+                price = trade["price"]
+                qty = trade["quantity"]
+                reason = trade.get("reason", "")
+                timestamp = trade["timestamp"].split("T")[1].split(".")[0]  # HH:MM:SS
+                
+                reason_label = f" ({reason})" if reason else ""
+                logger.info(f"  [{timestamp}] {side} {qty} {symbol} @ ${price:.2f}{reason_label}")
+            
+            # Calculate P&L for completed round trips
+            for i, sell in enumerate(sell_trades):
+                if i < len(buy_trades):
+                    buy = buy_trades[i]
+                    pnl = (sell["price"] - buy["price"]) * sell["quantity"]
+                    total_pnl += pnl
+                    
+                    if pnl >= 0:
+                        wins += 1
+                    else:
+                        losses += 1
+                    
+                    pnl_label = "profit" if pnl >= 0 else "loss"
+                    logger.info(f"    -> Round trip P&L: ${pnl:+,.2f} ({pnl_label})")
+        
+        if not self.trade_log:
+            logger.info("  No trades executed")
         
         logger.info("=" * 50)
         logger.info("ACCOUNT SUMMARY")
@@ -258,9 +310,19 @@ class PaperBroker(IBroker):
         logger.info(f"  Unrealized PnL:${balance['unrealized_pnl']:>12,.2f}")
         logger.info(f"  Realized PnL:  ${balance['realized_pnl']:>12,.2f}")
         
+        # Win ratio and profit ratio
+        total_trades = wins + losses
+        if total_trades > 0:
+            win_ratio = wins / total_trades * 100
+            profit_ratio = balance['realized_pnl'] / self.initial_cash * 100
+            logger.info("-" * 50)
+            logger.info(f"  Trades: {total_trades} | Wins: {wins} | Losses: {losses}")
+            logger.info(f"  Win Ratio:    {win_ratio:>6.1f}%")
+            logger.info(f"  Profit Ratio: {profit_ratio:>+6.2f}%")
+        
         if self.positions:
             logger.info("-" * 50)
-            logger.info("POSITIONS:")
+            logger.info("OPEN POSITIONS:")
             for pos in self.positions.values():
                 logger.info(
                     f"  {pos.symbol}: {pos.quantity} @ ${pos.average_price:.2f} "
