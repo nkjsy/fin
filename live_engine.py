@@ -35,6 +35,10 @@ class LiveTradingEngine:
     CANDLE_POLL_INTERVAL = 300  # 5 minutes
     REALTIME_POLL_INTERVAL = 3  # 3 seconds for breakout/stop checks
     
+    # Retry settings for API calls
+    MAX_RETRIES = 3
+    RETRY_DELAYS = [1, 2]  # seconds between retries
+    
     # Eastern timezone for market hours
     ET = ZoneInfo("America/New_York")
     
@@ -58,7 +62,7 @@ class LiveTradingEngine:
         
         self.strategies: Dict[str, BullFlagLiveStrategy] = {}
         self.running = False
-        self._last_candle_time: Dict[str, datetime] = {}
+        self._last_processed_slot: Dict[str, int] = {}  # slot = minutes since market open / 5
         
         # Initialize strategy for each symbol
         for symbol in symbols:
@@ -129,6 +133,17 @@ class LiveTradingEngine:
                 return True
         return False
     
+    def _datetime_to_slot(self, dt: datetime) -> int:
+        """Convert datetime to slot number (minutes since market open / 5)."""
+        market_open = dt.replace(hour=9, minute=30, second=0, microsecond=0)
+        minutes_since_open = int((dt - market_open).total_seconds() / 60)
+        return minutes_since_open // 5
+    
+    def _slot_to_time_str(self, slot: int) -> str:
+        """Convert slot number to time string (e.g., slot 0 -> '09:30')."""
+        minutes = 9 * 60 + 30 + slot * 5
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
+    
     def _fetch_quotes(self, symbols: List[str]) -> Dict[str, float]:
         """
         Fetch real-time quotes for symbols.
@@ -158,9 +173,12 @@ class LiveTradingEngine:
         
         return prices
     
-    def _fetch_candles(self, symbol: str, num_candles: int = 1) -> List[Candle]:
+    def _fetch_candles(self, symbol: str) -> List[Candle]:
         """
-        Fetch the last N 5-minute candles for a symbol.
+        Fetch 5-minute candles for a symbol.
+        
+        Uses slot-based tracking to ensure complete candles are included and
+        incomplete ones excluded. Retries on API failure or missing slots.
         
         Args:
             symbol: Stock symbol
@@ -169,70 +187,104 @@ class LiveTradingEngine:
         Returns:
             List of Candles (oldest first), may be empty
         """
+        now_et = datetime.now(self.ET)
+        current_slot = self._datetime_to_slot(now_et)
         
-        try:
-            # Start from market open today to limit data
-            now_et = datetime.now(self.ET)
-            market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-            
-            resp = self.client.get_price_history_every_five_minutes(
-                symbol,
-                start_datetime=market_open,
-                end_datetime=None,
-                need_extended_hours_data=False,
-                need_previous_close=False
-            )
-            
-            if resp.status_code != httpx.codes.OK:
-                logger.info(f"Failed to get candles for {symbol}: {resp.status_code}")
-                return []
-            
-            data = resp.json()
-            candles = data.get("candles", [])
-            
-            if not candles:
-                return []
-            
-            # Get last N candles (excluding the very last which may be incomplete)
-            # Take from index -(num_candles+1) to -1
-            start_idx = max(0, len(candles) - num_candles - 1)
-            selected = candles[start_idx:-1] if len(candles) > 1 else []
-            
-            result = []
-            for c in selected:
-                candle_time = datetime.fromtimestamp(c["datetime"] / 1000, tz=ZoneInfo("America/New_York"))
-                
-                # Skip if we already processed this candle
-                if symbol in self._last_candle_time:
-                    if candle_time <= self._last_candle_time[symbol]:
-                        continue
-                
-                result.append(Candle(
-                    timestamp=candle_time,
-                    open=float(c["open"]),
-                    high=float(c["high"]),
-                    low=float(c["low"]),
-                    close=float(c["close"]),
-                    volume=int(c["volume"])
-                ))
-            
-            # Update last candle time
-            if result:
-                self._last_candle_time[symbol] = result[-1].timestamp
-            
-            return result
-            
-        except Exception as e:
-            logger.info(f"Error fetching candles for {symbol}: {e}")
+        # Determine expected slot range
+        last_slot = self._last_processed_slot.get(symbol, -1)
+        expected_slots = set(range(last_slot + 1, current_slot))
+        
+        if not expected_slots:
             return []
+        
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                # Start from market open today to limit data
+                market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                
+                resp = self.client.get_price_history_every_five_minutes(
+                    symbol,
+                    start_datetime=market_open,
+                    end_datetime=None,
+                    need_extended_hours_data=False,
+                    need_previous_close=False
+                )
+                
+                if resp.status_code != httpx.codes.OK:
+                    logger.info(f"Failed to get candles for {symbol}: {resp.status_code}")
+                    if attempt < self.MAX_RETRIES - 1:
+                        time.sleep(self.RETRY_DELAYS[attempt])
+                        continue
+                    return []
+                
+                data = resp.json()
+                candles = data.get("candles", [])
+                
+                if not candles:
+                    if attempt < self.MAX_RETRIES - 1:
+                        time.sleep(self.RETRY_DELAYS[attempt])
+                        continue
+                    return []
+                
+                # Filter candles by slot: include only complete candles we haven't processed
+                result = []
+                received_slots = set()
+                
+                for c in candles:
+                    candle_time = datetime.fromtimestamp(c["datetime"] / 1000, tz=self.ET)
+                    candle_slot = self._datetime_to_slot(candle_time)
+                    
+                    # Only include candles in expected range (complete and not yet processed)
+                    if candle_slot in expected_slots:
+                        received_slots.add(candle_slot)
+                        result.append(Candle(
+                            timestamp=candle_time,
+                            open=float(c["open"]),
+                            high=float(c["high"]),
+                            low=float(c["low"]),
+                            close=float(c["close"]),
+                            volume=int(c["volume"])
+                        ))
+                
+                # Check for missing slots
+                missing_slots = expected_slots - received_slots
+                
+                if missing_slots and attempt < self.MAX_RETRIES - 1:
+                    # Retry if slots are missing
+                    missing_times = [self._slot_to_time_str(s) for s in sorted(missing_slots)]
+                    logger.info(f"{symbol}: Retry {attempt + 1}/{self.MAX_RETRIES} - missing slots {missing_times}")
+                    time.sleep(self.RETRY_DELAYS[attempt])
+                    continue
+                
+                # Log warning if still missing after all retries
+                if missing_slots:
+                    missing_times = [self._slot_to_time_str(s) for s in sorted(missing_slots)]
+                    logger.info(f"{symbol}: WARNING - missing candles for slots {missing_times}")
+                
+                # Sort by timestamp and update last processed slot
+                result.sort(key=lambda c: c.timestamp)
+                if received_slots:
+                    self._last_processed_slot[symbol] = max(received_slots)
+                
+                return result
+                
+            except Exception as e:
+                logger.info(f"Error fetching candles for {symbol}: {e}")
+                if attempt < self.MAX_RETRIES - 1:
+                    time.sleep(self.RETRY_DELAYS[attempt])
+                    continue
+                return []
+        
+        return []
     
-    def _process_candles(self, num_candles: int = 1):
+    def _process_candles(self):
         """Fetch and process 5-minute candles for all symbols."""
         for symbol in self.symbols:
-            candles = self._fetch_candles(symbol, num_candles)
+            candles = self._fetch_candles(symbol)
             for candle in candles:
+                candle_time_str = candle.timestamp.strftime("%H:%M")
                 logger.info(
-                    f"{symbol}: O={candle.open:.2f} H={candle.high:.2f} "
+                    f"[{candle_time_str}] {symbol}: O={candle.open:.2f} H={candle.high:.2f} "
                     f"L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}"
                 )
                 strategy = self.strategies[symbol]
@@ -274,7 +326,9 @@ class LiveTradingEngine:
         logger.info("Starting live trading engine...")
         self.running = True
         
-        last_candle_slot = 5  # Slot 5 = :25 minute mark, ensures we catch candles from market open
+        # Initialize to current slot - 1 to trigger immediate candle fetch
+        now_et = datetime.now(self.ET)
+        last_poll_slot = self._datetime_to_slot(now_et) - 1
         
         try:
             while self.running:
@@ -285,16 +339,11 @@ class LiveTradingEngine:
                     logger.info("Market closed - stopping engine")
                     break
                 
-                # Poll candles at each 5-minute boundary (e.g., :00, :05, :10...)
-                current_5min_slot = now_et.minute // 5
-                if current_5min_slot != last_candle_slot:
-                    # Calculate how many candles we need to process
-                    num_candles = current_5min_slot - last_candle_slot
-                    if num_candles < 0:
-                        num_candles += 12  # Handle hour boundary (0-11 slots per hour)
-                    
-                    self._process_candles(num_candles)
-                    last_candle_slot = current_5min_slot
+                # Poll candles at each 5-minute boundary
+                current_slot = self._datetime_to_slot(now_et)
+                if current_slot != last_poll_slot:
+                    self._process_candles()
+                    last_poll_slot = current_slot
                 
                 # Fast polling for real-time checks when needed
                 if self._needs_realtime_polling():
