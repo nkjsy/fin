@@ -86,6 +86,11 @@ class GreenSequence:
     @property
     def avg_volume(self) -> float:
         return self.volume_sum / self.count if self.count > 0 else 0
+    
+    # for logging purposes
+    def __str__(self):
+        return (f"GreenSequence(count={self.count}, start_price={self.start_price}, "
+                f"high={self.high}, low={self.low}, avg_volume={self.avg_volume})")
 
 
 class BullFlagLiveStrategy:
@@ -311,6 +316,10 @@ class BullFlagLiveStrategy:
                     cond_retracement = candle.low >= self.pb_limit_price
                     cond_ema = candle.low >= ema if ema is not None else True
                     cond_vol = candle.volume <= self.pb_avg_green_vol
+
+                    # logging green sequence conditions and ema for analysis
+                    self._log(f"Green seq conditions: {self.green_seq}, "
+                              f"EMA: {ema:.2f} | ")
                     
                     if cond_retracement and cond_ema and cond_vol:
                         self.state = StrategyState.PULLBACK
