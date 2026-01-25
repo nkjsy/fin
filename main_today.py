@@ -21,7 +21,8 @@ from broker.schwab_broker import SchwabBroker
 from live_engine import LiveTradingEngine
 from utils import wait_for_market_open
 from client import AutoRefreshSchwabClient
-from logger import get_logger, enable_file_logging
+from logger import get_logger, enable_file_logging, get_log_file_path
+from plotting import plot_from_log
 
 
 # Enable file logging for production (writes to logs/YYYY-MM-DD.log)
@@ -148,6 +149,14 @@ def main():
         raise
     
     logger.info("--- Session Complete ---")
+    
+    # Visualize log file
+    log_path = get_log_file_path()
+    if log_path:
+        logger.info(f"Generating charts from log: {log_path}")
+        plot_from_log(log_path)
+    
+    # todo: long term performance summary
 
 
 if __name__ == "__main__":

@@ -1,3 +1,7 @@
+import os
+import re
+from datetime import datetime
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -164,3 +168,166 @@ def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_pre
         fig.update_yaxes(range=[0, max_vol * 5], secondary_y=True)
     
     fig.show()
+
+
+def parse_log_file(log_path: str) -> dict:
+    """
+    Parse a log file to extract trading date, tickers, candle data, and trade signals.
+    
+    Returns:
+        dict with keys:
+            - trading_date: str (YYYY-MM-DD)
+            - tickers: list of ticker symbols
+            - candles: dict mapping ticker -> list of (datetime, O, H, L, C, V)
+            - trades: dict mapping ticker -> list of (datetime, action, price)
+    """
+    result = {
+        'trading_date': None,
+        'tickers': [],
+        'candles': {},  # ticker -> [(datetime, O, H, L, C, V), ...]
+        'trades': {}  # ticker -> [(datetime, action, price), ...]
+    }
+    
+    # Extract date from log filename (e.g., 2026-01-22_09-31-34.log)
+    log_filename = log_path.split('\\')[-1].split('/')[-1]
+    date_match = re.match(r'(\d{4}-\d{2}-\d{2})', log_filename)
+    if date_match:
+        result['trading_date'] = date_match.group(1)
+    
+    with open(log_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    for line in lines:
+        # Extract tickers from "Confirmed X tickers" line
+        # [09:40:22] [SCANNER] Confirmed 7 tickers: ['SXTP', 'CMCT', ...]
+        ticker_match = re.search(r"Confirmed \d+ tickers: \[([^\]]+)\]", line)
+        if ticker_match:
+            tickers_str = ticker_match.group(1)
+            result['tickers'] = [t.strip().strip("'\"") for t in tickers_str.split(',')]
+        
+        # Extract candle data from ENGINE logs
+        # Format: [09:40:42] [ENGINE] [09:30] MOVE: O=20.14 H=23.50 L=20.14 C=21.73 V=2056439
+        candle_match = re.search(
+            r"\[ENGINE\] \[(\d{2}:\d{2})\] (\w+): O=([0-9.]+) H=([0-9.]+) L=([0-9.]+) C=([0-9.]+) V=(\d+)",
+            line
+        )
+        if candle_match:
+            time_str = candle_match.group(1)  # Candle time like "09:30"
+            ticker = candle_match.group(2)
+            o = float(candle_match.group(3))
+            h = float(candle_match.group(4))
+            l = float(candle_match.group(5))
+            c = float(candle_match.group(6))
+            v = int(candle_match.group(7))
+            
+            if ticker not in result['candles']:
+                result['candles'][ticker] = []
+            
+            if result['trading_date']:
+                dt_str = f"{result['trading_date']} {time_str}:00"
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                result['candles'][ticker].append((dt, o, h, l, c, v))
+        
+        # Extract BUY signals
+        # [11:20:21] [ROLR] SIGNAL: BUY @ $11.50 | Bull flag breakout | Stop: $11.04
+        buy_match = re.search(r"\[(\d{2}:\d{2}:\d{2})\] \[(\w+)\] SIGNAL: BUY @ \$([0-9.]+)", line)
+        if buy_match:
+            time_str = buy_match.group(1)
+            ticker = buy_match.group(2)
+            price = float(buy_match.group(3))
+            
+            if ticker not in result['trades']:
+                result['trades'][ticker] = []
+            
+            # Combine date and time
+            if result['trading_date']:
+                dt_str = f"{result['trading_date']} {time_str}"
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                result['trades'][ticker].append((dt, 'BUY', price))
+        
+        # Extract SELL signals
+        # [12:09:33] [GLSI] SIGNAL: SELL @ $25.51 | Stop loss hit
+        sell_match = re.search(r"\[(\d{2}:\d{2}:\d{2})\] \[(\w+)\] SIGNAL: SELL @ \$([0-9.]+)", line)
+        if sell_match:
+            time_str = sell_match.group(1)
+            ticker = sell_match.group(2)
+            price = float(sell_match.group(3))
+            
+            if ticker not in result['trades']:
+                result['trades'][ticker] = []
+            
+            if result['trading_date']:
+                dt_str = f"{result['trading_date']} {time_str}"
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                result['trades'][ticker].append((dt, 'SELL', price))
+    
+    return result
+
+
+def plot_from_log(log_path: str, tickers: list = None, timeframe: str = "minute5"):
+    """
+    Plot charts for tickers based on a log file.
+    
+    Args:
+        log_path: Path to the log file
+        tickers: Optional list of specific tickers to plot. If None, plots all tickers from the log.
+        timeframe: Timeframe for the chart (default: "minute5")
+    """
+    # Parse log file
+    log_data = parse_log_file(log_path)
+    
+    if not log_data['trading_date']:
+        print(f"Could not extract trading date from log file: {log_path}")
+        return
+    
+    trading_date = log_data['trading_date']
+    
+    # Determine which tickers to plot
+    tickers_to_plot = tickers if tickers else log_data['tickers']
+    
+    if not tickers_to_plot:
+        print("No tickers found in log file")
+        return
+    
+    print(f"Plotting {len(tickers_to_plot)} tickers for {trading_date}")
+    
+    # Plot each ticker using candle data from logs
+    for ticker in tickers_to_plot:
+        candles = log_data['candles'].get(ticker, [])
+        
+        if not candles:
+            print(f"No candle data for {ticker} in log file")
+            continue
+        
+        print(f"Plotting {ticker} with {len(candles)} candles from log...")
+        
+        # Create DataFrame from candle data
+        df = pd.DataFrame(candles, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        
+        # Create trades DataFrame for this ticker
+        trades_list = log_data['trades'].get(ticker, [])
+        if trades_list:
+            trades = pd.DataFrame(trades_list, columns=['Datetime', 'Action', 'Price'])
+        else:
+            trades = pd.DataFrame(columns=['Datetime', 'Action', 'Price'])
+        
+        # Plot using existing function
+        plot_performance(
+            ticker=ticker,
+            df_res=df,
+            trades=trades,
+            timeframe=timeframe,
+            strategy_name="BullFlagLive",
+            title_prefix="LOG:",
+            trading_date=trading_date,
+            show_states=False
+        )
+
+
+if __name__ == "__main__":
+    # --- CONFIGURATION ---
+    LOG_PATH = "logs/2026-01-23_09-26-31.log"
+    TICKERS = None  # Set to list like ["MOVE", "RVYL"] to plot specific tickers, or None for all
+    TIMEFRAME = "minute5"
+    # ----------------------
+    plot_from_log(LOG_PATH, tickers=TICKERS, timeframe=TIMEFRAME)

@@ -157,3 +157,13 @@ def get_logger(name: str) -> logging.Logger:
         Logger instance
     """
     return setup_logger(name)
+
+
+def get_log_file_path() -> str | None:
+    """
+    Get the current log file path if file logging is enabled.
+    
+    Returns:
+        Path to log file, or None if file logging is not enabled.
+    """
+    return _log_file_path
