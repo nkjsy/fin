@@ -319,7 +319,7 @@ class BullFlagLiveStrategy:
 
                     # logging green sequence conditions and ema for analysis
                     self._log(f"Green seq conditions: {self.green_seq}, "
-                              f"EMA: {ema:.2f} | ")
+                              f"EMA: {ema:.2f if ema is not None else 'N/A'} | ")
                     
                     if cond_retracement and cond_ema and cond_vol:
                         self.state = StrategyState.PULLBACK
