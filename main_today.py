@@ -156,7 +156,7 @@ def main():
         logger.info(f"Generating charts from log: {log_path}")
         plot_from_log(log_path)
     
-    # todo: long term performance summary
+    # TODO: long term performance summary
 
 
 if __name__ == "__main__":

@@ -318,8 +318,9 @@ class BullFlagLiveStrategy:
                     cond_vol = candle.volume <= self.pb_avg_green_vol
 
                     # logging green sequence conditions and ema for analysis
+                    ema_str = f"{ema:.2f}" if ema is not None else "N/A"
                     self._log(f"Green seq conditions: {self.green_seq}, "
-                              f"EMA: {ema:.2f if ema is not None else 'N/A'} | ")
+                              f"EMA: {ema_str} | ")
                     
                     if cond_retracement and cond_ema and cond_vol:
                         self.state = StrategyState.PULLBACK
