@@ -189,39 +189,20 @@ class LiveMomentumScanner(BaseScanner):
                 else:
                     return False
             
-            # Extract date and time components
-            df["Date"] = df["Datetime"].dt.date
-            df["Time"] = df["Datetime"].dt.time
+            # Use shared confirm_volume (9:30-9:40 window)
+            confirmed, ratio = self.confirm_volume(
+                df,
+                threshold=self.relative_volume_threshold,
+                start_time=dt_time(9, 30),
+                end_time=dt_time(9, 40)
+            )
             
-            # Get unique dates
-            dates = sorted(df["Date"].unique())
-            
-            if len(dates) < 2:
-                logger.warning(f"    Not enough days of data for {symbol}")
+            if ratio is None:
+                logger.warning(f"    Could not calculate rel volume for {symbol}")
                 return False
             
-            today = dates[-1]
-            yesterday = dates[-2]
-            
-            # Filter for 9:30-9:40 window
-            start_time = dt_time(9, 30)
-            end_time = dt_time(9, 40)
-            
-            def get_window_volume(date):
-                mask = (df["Date"] == date) & (df["Time"] >= start_time) & (df["Time"] < end_time)
-                return df[mask]["Volume"].sum()
-            
-            vol_today = get_window_volume(today)
-            vol_yesterday = get_window_volume(yesterday)
-            
-            if vol_yesterday == 0:
-                logger.warning(f"    No yesterday volume for {symbol}")
-                return False
-            
-            ratio = vol_today / vol_yesterday
-            logger.info(f"    {symbol}: today ({today}) {vol_today:,.0f} vs yesterday ({yesterday}) {vol_yesterday:,.0f} ({ratio:.1f}x)")
-            
-            return ratio >= self.relative_volume_threshold
+            logger.info(f"    {symbol}: relVol={ratio:.1f}x")
+            return confirmed
             
         except Exception as e:
             logger.error(f"    Error checking volume for {symbol}: {e}")

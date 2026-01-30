@@ -112,3 +112,91 @@ Transition from historical backtesting to real-time trading using schwab-py. Sca
     - Fetches 5-min data 9:30–9:40 to confirm 5x volume vs previous day
     - Injects `PaperBroker` or `SchwabBroker` based on flag
     - Runs `LiveTradingEngine` in sync polling loop until market close
+
+## Milestone 3: Premarket News Gap Strategy
+
+A premarket news-based strategy that scans Finviz every minute, buys confirmed stocks immediately, and exits at 9:35 AM. Speed-optimized with parallel API calls and order placement.
+
+### Strategy Rules
+
+| Rule | Value |
+|------|-------|
+| Scan time | 7:00 AM - 9:29 AM ET |
+| Scan interval | 60 seconds |
+| Pre-filter | Finviz: price $2-$50, float ≤ 100M |
+| Confirmation | Schwab: gain ≥ 3% vs prev close, rel volume ≥ 5x vs yesterday same-time |
+| Max positions | 5 per day |
+| Position size | $10,000 each (constant) |
+| Order type | Limit at ask + 0.5% |
+| Stop loss | 5%, monitored after 9:30 AM only |
+| Exit | 9:35 AM ET |
+
+### Expected Behavior
+
+| Scenario | Frequency |
+|----------|-----------|
+| Empty scan | Most rounds |
+| 1-3 stocks | Occasional |
+| 5+ stocks | Rare |
+
+### Speed Optimizations
+
+| Step | Method | Latency |
+|------|--------|---------|
+| Finviz scrape | Single request | ~1 sec |
+| Schwab history + calculations | Parallel (ThreadPoolExecutor) | ~1-2 sec |
+| Order placement | Parallel (ThreadPoolExecutor) | ~0.5 sec |
+| **Total** | | ~3-4 sec after scan |
+
+Rate limit: 120 Schwab API calls/min. With 1-3 candidates per scan, well within limit.
+
+### Components
+
+#### 1. `scanner/finviz_news.py`
+
+Extends `BaseScanner`. All confirmation logic lives here.
+
+- Scrape Finviz for stocks with news
+- Pre-filter: price $2-$50, float ≤ 100M
+- Skip symbols in `skip` param or currently `confirming`
+- Parallel confirm via Schwab: fetch history, calculate gain % and rel volume
+- Return confirmed `List[str]`
+
+#### 2. `PremarketNewsEngine` in `live_engine.py`
+
+Position management only. Reuses existing broker, logger, client.
+
+- `POSITION_AMOUNT = 10000` constant
+- `add_positions(symbols)` - Buy in parallel, limit at ask + 0.5%, skip if already in position
+- `check_stop_losses()` - Check stop losses, only call after 9:30 AM
+- `exit_all()` - Sell all positions in parallel at 9:35 AM
+- `_fetch_quotes()` - Reuse pattern from `LiveTradingEngine`
+
+#### 3. `main_premarket.py`
+
+Entry point. Owns the scan loop.
+
+- Parse `--live` flag (default: paper trading)
+- 7:00-9:29: Scan every 60 sec, buy confirmed (max 5)
+- 9:30-9:35: Check stop losses every 5 sec
+- 9:35: Exit all positions
+- Print summary
+
+### Reused Components
+
+| Component | Source | Usage |
+|-----------|--------|-------|
+| `IBroker` | `broker/interfaces.py` | Order placement |
+| `PaperBroker` | `broker/paper_broker.py` | Testing |
+| `SchwabBroker` | `broker/schwab_broker.py` | Live trading |
+| `AutoRefreshSchwabClient` | `client/` | Schwab API auth |
+| `get_logger` | `logger.py` | Logging |
+| `BaseScanner` | `scanner/base.py` | Scanner base class |
+
+### Edge Case: Overlapping Confirmations
+
+If a symbol is still being confirmed when next scan returns it:
+
+- Scanner tracks `confirming: set` for in-flight confirmations
+- Skip symbols in `confirming` to avoid duplicate work
+- Clean up `confirming` after each batch completes

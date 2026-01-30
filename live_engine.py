@@ -374,3 +374,269 @@ class LiveTradingEngine:
             self.broker.print_summary()
         
         logger.info("Engine stopped")
+
+
+# ============================================================================
+# Premarket News Engine
+# ============================================================================
+
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+
+
+@dataclass
+class PremarketPosition:
+    """Tracks a premarket position."""
+    symbol: str
+    entry_price: float
+    quantity: int
+    stop_loss: float
+
+
+class PremarketNewsEngine:
+    """
+    Premarket news gap trading engine.
+    
+    Manages positions only - scanning is handled externally by main_premarket.py.
+    Reuses broker, client, and logging from LiveTradingEngine patterns.
+    """
+    
+    POSITION_AMOUNT = 10000  # $10k per position
+    STOP_LOSS_PCT = 0.05     # 5% stop loss
+    LIMIT_BUFFER = 1.005     # Buy at ask + 0.5%
+    
+    ET = ZoneInfo("America/New_York")
+    
+    def __init__(self, client_wrapper: AutoRefreshSchwabClient, broker: IBroker):
+        """
+        Initialize PremarketNewsEngine.
+        
+        Args:
+            client_wrapper: AutoRefreshSchwabClient for API calls
+            broker: IBroker implementation (PaperBroker or SchwabBroker)
+        """
+        self.client_wrapper = client_wrapper
+        self.broker = broker
+        self.positions: Dict[str, PremarketPosition] = {}
+        self._logger = get_logger("PREMARKET")
+    
+    @property
+    def client(self) -> Client:
+        """Get the current Schwab client."""
+        return self.client_wrapper.client
+    
+    def add_positions(self, symbols: List[str]) -> None:
+        """
+        Buy symbols in parallel. Skip if already in position.
+        
+        Args:
+            symbols: List of symbols to buy
+        """
+        new_symbols = [s for s in symbols if s not in self.positions]
+        
+        if not new_symbols:
+            return
+        
+        self._logger.info(f"Adding positions: {new_symbols}")
+        
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            executor.map(self._place_buy_order, new_symbols)
+    
+    def _place_buy_order(self, symbol: str) -> None:
+        """
+        Place limit order at ask + 0.5% and track position.
+        
+        Args:
+            symbol: Symbol to buy
+        """
+        try:
+            # Fetch current quote
+            quote = self._fetch_quote(symbol)
+            
+            if quote is None:
+                self._logger.info(f"  {symbol}: Failed to get quote")
+                return
+            
+            ask_price = quote.get("askPrice", 0)
+            
+            if ask_price <= 0:
+                # Fallback to last price if ask not available
+                ask_price = quote.get("lastPrice", 0)
+            
+            if ask_price <= 0:
+                self._logger.info(f"  {symbol}: No valid price")
+                return
+            
+            # Calculate limit price (ask + 0.5%)
+            limit_price = round(ask_price * self.LIMIT_BUFFER, 2)
+            quantity = int(self.POSITION_AMOUNT / limit_price)
+            
+            if quantity < 1:
+                self._logger.info(f"  {symbol}: Quantity too small")
+                return
+            
+            # Place order
+            order_id = self.broker.place_order(
+                symbol=symbol,
+                side=OrderSide.BUY,
+                quantity=quantity,
+                order_type=OrderType.LIMIT,
+                limit_price=limit_price,
+                reason="News gap entry"
+            )
+            
+            # Track position
+            stop_loss = round(limit_price * (1 - self.STOP_LOSS_PCT), 2)
+            self.positions[symbol] = PremarketPosition(
+                symbol=symbol,
+                entry_price=limit_price,
+                quantity=quantity,
+                stop_loss=stop_loss
+            )
+            
+            self._logger.info(
+                f"  {symbol}: BUY {quantity} @ ${limit_price:.2f} "
+                f"(stop: ${stop_loss:.2f}) - {order_id}"
+            )
+            
+        except Exception as e:
+            self._logger.info(f"  {symbol}: Error placing order - {e}")
+    
+    def _fetch_quote(self, symbol: str) -> Optional[dict]:
+        """
+        Fetch quote for a single symbol.
+        
+        Args:
+            symbol: Ticker symbol
+            
+        Returns:
+            Quote dict or None
+        """
+        try:
+            resp = self.client.get_quote(symbol)
+            
+            if resp.status_code != httpx.codes.OK:
+                return None
+            
+            data = resp.json()
+            return data.get(symbol, {}).get("quote", {})
+            
+        except Exception as e:
+            self._logger.info(f"Error fetching quote for {symbol}: {e}")
+            return None
+    
+    def _fetch_quotes(self, symbols: List[str]) -> Dict[str, float]:
+        """
+        Fetch quotes for multiple symbols.
+        
+        Args:
+            symbols: List of symbols
+            
+        Returns:
+            Dict mapping symbol to last price
+        """
+        prices = {}
+        
+        if not symbols:
+            return prices
+        
+        try:
+            resp = self.client.get_quotes(symbols)
+            
+            if resp.status_code != httpx.codes.OK:
+                return prices
+            
+            data = resp.json()
+            for symbol, quote_data in data.items():
+                quote = quote_data.get("quote", {})
+                price = quote.get("lastPrice", 0)
+                if price > 0:
+                    prices[symbol] = price
+                    
+        except Exception as e:
+            self._logger.info(f"Error fetching quotes: {e}")
+        
+        return prices
+    
+    def check_stop_losses(self) -> None:
+        """
+        Check stop losses for all positions.
+        Only call after 9:30 AM when market is open.
+        """
+        if not self.positions:
+            return
+        
+        prices = self._fetch_quotes(list(self.positions.keys()))
+        
+        for symbol, price in prices.items():
+            pos = self.positions.get(symbol)
+            
+            if pos and price <= pos.stop_loss:
+                self._logger.info(
+                    f"  {symbol}: Stop loss triggered @ ${price:.2f} "
+                    f"(stop: ${pos.stop_loss:.2f})"
+                )
+                self._place_sell_order(symbol, "Stop loss triggered")
+    
+    def _place_sell_order(self, symbol: str, reason: str) -> None:
+        """
+        Place sell order for a position.
+        
+        Args:
+            symbol: Symbol to sell
+            reason: Reason for selling
+        """
+        pos = self.positions.get(symbol)
+        
+        if pos is None:
+            return
+        
+        try:
+            # Use market order for exits (faster execution)
+            # Note: For premarket, we might need limit order
+            quote = self._fetch_quote(symbol)
+            bid_price = quote.get("bidPrice", 0) if quote else 0
+            
+            if bid_price <= 0:
+                bid_price = quote.get("lastPrice", pos.entry_price) if quote else pos.entry_price
+            
+            order_id = self.broker.place_order(
+                symbol=symbol,
+                side=OrderSide.SELL,
+                quantity=pos.quantity,
+                order_type=OrderType.LIMIT,
+                limit_price=round(bid_price * 0.995, 2),  # Bid - 0.5% for quick fill
+                reason=reason
+            )
+            
+            # Remove from positions
+            del self.positions[symbol]
+            
+            self._logger.info(f"  {symbol}: SELL {pos.quantity} @ ${bid_price:.2f} - {order_id}")
+            
+        except Exception as e:
+            self._logger.info(f"  {symbol}: Error placing sell order - {e}")
+    
+    def exit_all(self) -> None:
+        """
+        Exit all positions. Call at 9:35 AM.
+        """
+        if not self.positions:
+            self._logger.info("No positions to exit")
+            return
+        
+        self._logger.info(f"Exiting all positions: {list(self.positions.keys())}")
+        
+        symbols = list(self.positions.keys())
+        
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            executor.map(
+                lambda s: self._place_sell_order(s, "Time exit 9:35 AM"),
+                symbols
+            )
+    
+    def print_summary(self) -> None:
+        """Print position summary."""
+        if hasattr(self.broker, 'print_summary'):
+            self.broker.print_summary()
+
