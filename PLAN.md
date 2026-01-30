@@ -200,3 +200,149 @@ If a symbol is still being confirmed when next scan returns it:
 - Scanner tracks `confirming: set` for in-flight confirmations
 - Skip symbols in `confirming` to avoid duplicate work
 - Clean up `confirming` after each batch completes
+
+## Milestone 4: Premarket Bull Flag Strategy (Refactor)
+
+Replace immediate buy/sell at 9:35 with bull flag strategy on 1-min chart. Keep scanner, add pattern-based entries/exits.
+
+### Strategy Rules
+
+| Rule | Value |
+|------|-------|
+| Scan time | 7:00 AM - 9:29 AM ET |
+| Scan interval | 60 seconds |
+| Pre-filter | Finviz: price $2-$50, float ≤ 100M, news in last 5 min |
+| Confirmation | Schwab: gain ≥ 3% vs 10 min ago, rel volume ≥ 5x, 10 consecutive candles |
+| Max tracked | 3 symbols (for speed) |
+| Position size | $10,000 each |
+| Entry | Bull flag breakout on 1-min chart |
+| Exit | Stop loss hit OR red candle close while in position |
+| Trading hours | 7:00 AM - 4:00 PM ET (extended hours enabled) |
+
+### Key Differences from Milestone 3
+
+| Aspect | Milestone 3 | Milestone 4 |
+|--------|-------------|-------------|
+| Entry | Buy immediately on confirm | Wait for bull flag breakout |
+| Exit | Force exit at 9:35 | Stop loss or red candle close |
+| Candle interval | 5-min | 1-min |
+| Max positions | 5 | 3 (tracking), entries depend on pattern |
+| Duration | 7:00-9:35 only | 7:00-4:00 (full day) |
+
+### Refactoring Plan
+
+#### 1. Generalize `LiveTradingEngine`
+
+Make the engine reusable for both 1-min (premarket) and 5-min (regular) trading.
+
+**New parameters in `__init__`:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `candle_interval` | `int` | `5` | Candle interval in minutes (1 or 5) |
+| `extended_hours` | `bool` | `False` | Enable premarket/afterhours data |
+| `position_amount` | `float` | `None` | Fixed position size (if set, ignores account %) |
+
+**Method updates:**
+
+- `_datetime_to_slot()` - Use `self.candle_interval` instead of hardcoded 5
+- `_slot_to_time_str()` - Use `self.candle_interval` instead of hardcoded 5
+- `_fetch_candles()` - Select API method based on interval, pass `extended_hours`
+- `_handle_signal()` - Use `position_amount` if set, otherwise calculate from account
+- `start()` - Adjust sleep timing based on `candle_interval`
+
+#### 2. Add `add_symbol()` method
+
+Allow dynamic symbol addition from scanner during runtime.
+
+```python
+def add_symbol(self, symbol: str, replay_minutes: int = 10) -> None:
+    """Add a symbol to track. Replays last N minutes of candles to catch up."""
+    if symbol in self.strategies:
+        return  # Already tracking
+    if len(self.strategies) >= self.max_symbols:
+        return  # At capacity
+    
+    # Fetch and replay historical candles
+    candles = self._fetch_history(symbol, minutes=replay_minutes)
+    strategy = BullFlagLiveStrategy(...)
+    for candle in candles:
+        strategy.process_candle(candle)
+    
+    self.strategies[symbol] = strategy
+```
+
+#### 3. Detect pullback failure
+
+When strategy transitions from PULLBACK → SCANNING, stop tracking the symbol.
+
+```python
+def _check_pattern_failed(self) -> None:
+    """Remove symbols where pattern failed (PULLBACK → SCANNING)."""
+    to_remove = []
+    for symbol, strategy in self.strategies.items():
+        if strategy.state == StrategyState.SCANNING and strategy.prev_state == StrategyState.PULLBACK:
+            to_remove.append(symbol)
+    
+    for symbol in to_remove:
+        self.logger.info(f"Pattern failed for {symbol}, removing from tracking")
+        del self.strategies[symbol]
+        del self.candle_data[symbol]
+```
+
+#### 4. Update `main_premarket.py`
+
+Combined scan + candle + quote loop architecture:
+
+```
+7:00 AM - 4:00 PM:
+├── Every 60 sec: Run Finviz scan
+│   └── If confirmed & slots available: add_symbol(sym, replay_minutes=10)
+├── Every 1 min (on candle close): Fetch candles, process_candle()
+│   └── Check for pattern failures, remove if PULLBACK → SCANNING
+└── Every 3 sec: Poll quotes for PULLBACK/IN_POSITION symbols
+    ├── PULLBACK: check_breakout(price) → entry signal
+    └── IN_POSITION: check_stop_loss(price) → exit signal
+```
+
+#### 5. Delete `PremarketNewsEngine`
+
+No longer needed after refactor. All functionality moves to generalized `LiveTradingEngine`.
+
+### Timing Analysis
+
+Measured latency (tested):
+
+| Operation | Latency |
+|-----------|---------|
+| Finviz scrape (2 stocks) | ~2.6 sec |
+| Schwab confirmation | ~2 sec |
+| **Total scan** | ~5 sec |
+
+Scan blocks at most 2 quote poll cycles (~6 sec max slippage). Acceptable for 60-sec scan interval.
+
+### Components
+
+#### 1. `LiveTradingEngine` (modified)
+
+- Add `candle_interval`, `extended_hours`, `position_amount` params
+- Add `add_symbol()` for dynamic symbol addition
+- Add `_check_pattern_failed()` to remove dead patterns
+- Support 1-min and 5-min candles
+
+#### 2. `main_premarket.py` (rewritten)
+
+- Use generalized `LiveTradingEngine` with `candle_interval=1`, `extended_hours=True`
+- Run Finviz scan in main loop every 60 sec
+- Track at most 3 symbols
+- Run until market close (4:00 PM)
+
+### Reused Components
+
+| Component | Source | Usage |
+|-----------|--------|-------|
+| `FinvizNewsScanner` | `scanner/finviz_news.py` | Premarket scanning |
+| `BullFlagLiveStrategy` | `strategy/bull_flag_live.py` | Pattern detection |
+| `LiveTradingEngine` | `live_engine.py` | Candle/quote polling (generalized) |
+| `IBroker` | `broker/interfaces.py` | Order placement |
+| `AutoRefreshSchwabClient` | `client/` | Schwab API auth |
