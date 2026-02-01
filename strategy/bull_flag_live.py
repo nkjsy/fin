@@ -1,7 +1,7 @@
 """
 Bull Flag Live Strategy
 
-Synchronous version that processes 5-minute candles with real-time 
+Synchronous version that processes candles with real-time 
 price checks during pullback and in-position states.
 """
 
@@ -97,7 +97,7 @@ class BullFlagLiveStrategy:
     """
     Bull flag strategy for live trading.
     
-    Processes 5-minute candles synchronously. When in PULLBACK or IN_POSITION
+    Processes candles synchronously. When in PULLBACK or IN_POSITION
     state, use check_breakout() or check_stop_loss() with real-time prices.
     """
     
@@ -130,6 +130,7 @@ class BullFlagLiveStrategy:
         
         # State tracking
         self.state = StrategyState.SCANNING
+        self.prev_state = StrategyState.SCANNING  # Track previous state for pattern failure detection
         self.green_seq = GreenSequence()
         self.candle_history: List[Candle] = []
         
@@ -154,6 +155,12 @@ class BullFlagLiveStrategy:
         
         # Per-symbol logger
         self._logger = get_logger(self.symbol)
+    
+    def _set_state(self, new_state: StrategyState):
+        """Set state and track previous state for pattern failure detection."""
+        self.prev_state = self.state
+        self.state = new_state
+        self._log(f"State: {self.prev_state.value} -> {new_state.value}")
     
     def _log(self, message: str):
         """Log with symbol prefix."""
@@ -207,7 +214,7 @@ class BullFlagLiveStrategy:
         if current_price >= self.breakout_price:
             self.entry_price = self.breakout_price
             self.stop_loss = self.pb_min_low
-            self.state = StrategyState.IN_POSITION
+            self._set_state(StrategyState.IN_POSITION)
             self.green_seq.reset()
             
             # Skip the current candle to avoid double state transition
@@ -238,7 +245,7 @@ class BullFlagLiveStrategy:
             return None
         
         if current_price <= self.stop_loss:
-            self.state = StrategyState.SCANNING
+            self._set_state(StrategyState.SCANNING)
             self.green_seq.reset()
             
             return self._emit_signal(
@@ -251,7 +258,7 @@ class BullFlagLiveStrategy:
     
     def process_candle(self, candle: Candle) -> Optional[Signal]:
         """
-        Process a new 5-minute candle.
+        Process a new candle.
         
         Args:
             candle: New OHLCV candle
@@ -323,7 +330,7 @@ class BullFlagLiveStrategy:
                               f"EMA: {ema_str} | ")
                     
                     if cond_retracement and cond_ema and cond_vol:
-                        self.state = StrategyState.PULLBACK
+                        self._set_state(StrategyState.PULLBACK)
                         self.pb_min_low = candle.low
                         self.breakout_price = candle.high  # Set breakout trigger
                         self._log(f"PULLBACK started | Breakout above: ${self.breakout_price:.2f}")
@@ -346,7 +353,7 @@ class BullFlagLiveStrategy:
         if candle.high > self.breakout_price:
             self.entry_price = self.breakout_price
             self.stop_loss = self.pb_min_low
-            self.state = StrategyState.IN_POSITION
+            self._set_state(StrategyState.IN_POSITION)
             self.green_seq.reset()
             
             return self._emit_signal(
@@ -363,7 +370,7 @@ class BullFlagLiveStrategy:
         
         if not (cond_retracement and cond_ema and cond_vol):
             self._log(f"Pullback invalidated | Ret:{cond_retracement} EMA:{cond_ema} Vol:{cond_vol}")
-            self.state = StrategyState.SCANNING
+            self._set_state(StrategyState.SCANNING)
             self.green_seq.reset()
             
             if candle.is_green:
@@ -378,7 +385,7 @@ class BullFlagLiveStrategy:
         """Handle IN_POSITION state."""
         # Check stop loss
         if candle.low < self.stop_loss:
-            self.state = StrategyState.SCANNING
+            self._set_state(StrategyState.SCANNING)
             self.green_seq.reset()
             
             return self._emit_signal(
@@ -389,7 +396,7 @@ class BullFlagLiveStrategy:
         
         # Check take profit (first red bar)
         if candle.is_red:
-            self.state = StrategyState.SCANNING
+            self._set_state(StrategyState.SCANNING)
             self.green_seq.reset()
             
             return self._emit_signal(
@@ -403,6 +410,7 @@ class BullFlagLiveStrategy:
     def reset(self):
         """Reset strategy state."""
         self.state = StrategyState.SCANNING
+        self.prev_state = StrategyState.SCANNING
         self.green_seq.reset()
         self.candle_history.clear()
         self.prev_candle = None

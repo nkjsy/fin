@@ -1,17 +1,27 @@
 """
-Premarket News Gap Trading
+Premarket Bull Flag Trading
 
 Scans Finviz every 60 seconds for stocks with news, confirms via Schwab,
-and buys confirmed stocks immediately. Exits all positions at 9:35 AM.
+and tracks confirmed stocks using bull flag strategy on 1-min chart.
+Entry on breakout, exit on stop loss or first red bar.
 
 Usage:
     python main_premarket.py [--live]
 
 Timeline:
-    7:00 AM  - Start scanning Finviz every 60 sec
-    7:00-9:29 - Buy confirmed stocks (max 5)
-    9:30-9:35 - Monitor stop losses every 5 sec
-    9:35 AM  - Exit all positions
+    7:00 AM    - Start scanning Finviz every 60 sec
+    7:00-10:00 - Scan, track patterns, trade breakouts
+    10:00 AM   - Stop new entries (configurable via ENTRY_CUTOFF)
+    After 10:00 - Continue managing existing positions until all closed
+    4:00 PM    - Market close, force stop
+
+Strategy:
+    - Scanner confirms stocks with news, 3% gain, 5x volume
+    - Track at most 3 symbols with bull flag strategy
+    - Replay last 10 min of 1-min candles when adding symbol
+    - Entry on bull flag breakout
+    - Exit on stop loss or first red bar
+    - If pattern fails (PULLBACK -> SCANNING), stop tracking
 """
 
 import argparse
@@ -23,35 +33,28 @@ from client import AutoRefreshSchwabClient
 from broker import PaperBroker, SchwabBroker
 from providers.schwab_lib import SchwabProvider
 from scanner.finviz_news import FinvizNewsScanner
-from live_engine import PremarketNewsEngine
+from live_engine import LiveTradingEngine
 from logger import get_logger, enable_file_logging
-from utils import wait_until_time
 
 
 ET = ZoneInfo("America/New_York")
 logger = get_logger("MAIN")
 
 # Time constants
-SCAN_START = dt_time(7, 0)
-ENTRY_CUTOFF = dt_time(9, 29)
-STOP_LOSS_START = dt_time(9, 30)
-EXIT_TIME = dt_time(9, 35)
+ENTRY_CUTOFF = dt_time(10, 0)  # Stop new entries after this time
+MARKET_CLOSE = dt_time(16, 0)
 
 # Interval constants
 SCAN_INTERVAL = 60  # seconds
-STOP_LOSS_INTERVAL = 5  # seconds
 
 # Position limits
-MAX_POSITIONS = 5
-
-
-def current_time() -> dt_time:
-    """Get current time in ET."""
-    return datetime.now(ET).time()
+MAX_SYMBOLS = 3
+POSITION_AMOUNT = 10000  # $10k per position
+REPLAY_MINUTES = 10  # minutes of history to replay when adding symbol
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Premarket News Gap Trading")
+    parser = argparse.ArgumentParser(description="Premarket Bull Flag Trading")
     parser.add_argument('--live', action='store_true', help='Use live trading (default: paper)')
     args = parser.parse_args()
     
@@ -59,11 +62,13 @@ def main():
     enable_file_logging()
     
     logger.info("=" * 60)
-    logger.info("Premarket News Gap Strategy")
+    logger.info("Premarket Bull Flag Strategy")
     logger.info(f"Mode: {'LIVE' if args.live else 'PAPER'}")
-    logger.info(f"Max positions: {MAX_POSITIONS}")
-    logger.info(f"Position size: ${PremarketNewsEngine.POSITION_AMOUNT:,}")
-    logger.info(f"Stop loss: {PremarketNewsEngine.STOP_LOSS_PCT*100:.0f}%")
+    logger.info(f"Max tracked symbols: {MAX_SYMBOLS}")
+    logger.info(f"Position size: ${POSITION_AMOUNT:,}")
+    logger.info(f"Entry cutoff: {ENTRY_CUTOFF.strftime('%H:%M')} ET")
+    logger.info(f"Candle interval: 1 min")
+    logger.info(f"Extended hours: True")
     logger.info("=" * 60)
     
     # Initialize components
@@ -77,76 +82,99 @@ def main():
     
     provider = SchwabProvider(client_wrapper.client)
     scanner = FinvizNewsScanner(provider)
-    engine = PremarketNewsEngine(client_wrapper, broker)
+    
+    # Create engine with 1-min candles and extended hours
+    engine = LiveTradingEngine(
+        client_wrapper=client_wrapper,
+        broker=broker,
+        symbols=[],  # Start with no symbols, add dynamically
+        candle_interval=1,
+        extended_hours=True,
+        position_amount=POSITION_AMOUNT,
+        max_symbols=MAX_SYMBOLS
+    )
     
     try:
-        # Phase 1: Scan & buy (until 9:29)
         logger.info("=" * 40)
-        logger.info("PHASE 1: Scanning & buying")
+        logger.info("Starting combined scan + trade loop")
         logger.info("=" * 40)
         
-        scan_count = 0
-        while current_time() < ENTRY_CUTOFF and len(engine.positions) < MAX_POSITIONS:
-            scan_count += 1
-            logger.info(f"--- Scan #{scan_count} @ {datetime.now(ET).strftime('%H:%M:%S')} ---")
+        engine.running = True
+        last_scan_time = 0
+        last_candle_slot = engine._datetime_to_slot(datetime.now(ET)) - 1
+        
+        while engine.running:
+            now_et = datetime.now(ET)
+            now_time = now_et.time()
             
-            # Scan for confirmed stocks
-            confirmed = scanner.scan(skip=set(engine.positions.keys()))
-            
-            # Calculate remaining slots
-            remaining = MAX_POSITIONS - len(engine.positions)
-            
-            if confirmed and remaining > 0:
-                to_buy = confirmed[:remaining]
-                logger.info(f"Buying: {to_buy}")
-                engine.add_positions(to_buy)
-            
-            # Log current positions
-            if engine.positions:
-                logger.info(f"Current positions ({len(engine.positions)}/{MAX_POSITIONS}): {list(engine.positions.keys())}")
-            
-            # Check if we've hit max positions
-            if len(engine.positions) >= MAX_POSITIONS:
-                logger.info("Max positions reached, stopping scan phase")
+            # Check market close
+            if now_time >= MARKET_CLOSE:
+                logger.info("Market closed - stopping")
                 break
             
-            # Sleep until next scan
-            time.sleep(SCAN_INTERVAL)
-        
-        # Phase 2: Stop loss monitoring (9:30 - 9:35)
-        logger.info("=" * 40)
-        logger.info("PHASE 2: Stop loss monitoring")
-        logger.info("=" * 40)
-        
-        if current_time() < STOP_LOSS_START:
-            wait_until_time(STOP_LOSS_START.hour, STOP_LOSS_START.minute, "market open")
-        
-        logger.info("Market open - monitoring stop losses")
-        
-        while current_time() < EXIT_TIME and engine.positions:
-            engine.check_stop_losses()
-            time.sleep(STOP_LOSS_INTERVAL)
-        
-        # Phase 3: Exit all (9:35)
-        logger.info("=" * 40)
-        logger.info("PHASE 3: Exiting all positions")
-        logger.info("=" * 40)
-        
-        if current_time() < EXIT_TIME:
-            wait_until_time(EXIT_TIME.hour, EXIT_TIME.minute, "exit time")
-        
-        engine.exit_all()
+            # Check if past entry cutoff and no symbols being tracked
+            past_cutoff = now_time >= ENTRY_CUTOFF
+            
+            if past_cutoff and not engine.strategies:
+                logger.info("Past entry cutoff and no symbols tracked - stopping")
+                break
+            
+            current_ts = time.time()
+            
+            # === SCAN PHASE (every 60 sec, only before cutoff) ===
+            if not past_cutoff and current_ts - last_scan_time >= SCAN_INTERVAL:
+                last_scan_time = current_ts
+                
+                # Only scan if we have capacity
+                if len(engine.strategies) < MAX_SYMBOLS:
+                    logger.info("--- Scanning ---")
+                    
+                    # Skip symbols already being tracked
+                    skip_symbols = set(engine.strategies.keys())
+                    confirmed = scanner.scan(skip=skip_symbols)
+                    
+                    # Add confirmed symbols
+                    for symbol in confirmed:
+                        if len(engine.strategies) >= MAX_SYMBOLS:
+                            break
+                        engine.add_symbol(symbol, replay_minutes=REPLAY_MINUTES)
+                    
+                    # Log current tracking state
+                    if engine.strategies:
+                        states = {s: st.state.value for s, st in engine.strategies.items()}
+                        logger.info(f"Tracking ({len(engine.strategies)}/{MAX_SYMBOLS}): {states}")
+            
+            # === CANDLE PHASE (on interval boundary) ===
+            current_slot = engine._datetime_to_slot(now_et)
+            if current_slot != last_candle_slot:
+                engine._process_candles()
+                last_candle_slot = current_slot
+            
+            # === QUOTE PHASE (fast polling when needed) ===
+            if engine._needs_realtime_polling():
+                engine._check_realtime_triggers()
+                time.sleep(engine.REALTIME_POLL_INTERVAL)
+            else:
+                # Sleep until next interval boundary or next scan
+                candle_poll_interval = engine.candle_interval * 60
+                seconds_into_slot = (now_et.minute % engine.candle_interval) * 60 + now_et.second
+                time_to_next_candle = candle_poll_interval - seconds_into_slot + 5
+                time_to_next_scan = max(0, SCAN_INTERVAL - (current_ts - last_scan_time))
+                
+                sleep_time = min(time_to_next_candle, time_to_next_scan)
+                time.sleep(max(1, sleep_time))
         
         # Summary
         logger.info("=" * 40)
         logger.info("SUMMARY")
         logger.info("=" * 40)
-        engine.print_summary()
+        if hasattr(broker, 'print_summary'):
+            broker.print_summary()
         
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-        engine.exit_all()
-        engine.print_summary()
+        if hasattr(broker, 'print_summary'):
+            broker.print_summary()
     except Exception as e:
         logger.info(f"Error: {e}")
         raise

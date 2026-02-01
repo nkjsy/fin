@@ -1,7 +1,7 @@
 """
 Live Trading Engine
 
-Synchronous polling engine that processes 5-minute candles and checks
+Synchronous polling engine that processes candles (1-min or 5-min) and checks
 real-time prices when strategies are in PULLBACK or IN_POSITION state.
 """
 
@@ -26,13 +26,14 @@ class LiveTradingEngine:
     """
     Synchronous live trading engine.
     
-    Polls 5-minute candles every 5 minutes. When any strategy is in 
-    PULLBACK or IN_POSITION state, switches to fast polling mode using
+    Polls candles at configurable intervals (1-min or 5-min). When any strategy
+    is in PULLBACK or IN_POSITION state, switches to fast polling mode using
     real-time quotes.
+    
+    Supports dynamic symbol addition via add_symbol() for scanner integration.
     """
     
     # Polling intervals (seconds)
-    CANDLE_POLL_INTERVAL = 300  # 5 minutes
     REALTIME_POLL_INTERVAL = 3  # 3 seconds for breakout/stop checks
     
     # Retry settings for API calls
@@ -46,7 +47,12 @@ class LiveTradingEngine:
         self,
         client_wrapper: AutoRefreshSchwabClient,
         broker: IBroker,
-        symbols: List[str]
+        symbols: Optional[List[str]] = None,
+        candle_interval: int = 5,
+        extended_hours: bool = False,
+        position_amount: Optional[float] = None,
+        max_symbols: int = 10,
+        remove_on_pattern_fail: bool = False
     ):
         """
         Initialize LiveTradingEngine.
@@ -54,24 +60,41 @@ class LiveTradingEngine:
         Args:
             client_wrapper: AutoRefreshSchwabClient that manages token refresh
             broker: IBroker implementation (PaperBroker or SchwabBroker)
-            symbols: List of symbols to trade
+            symbols: List of symbols to trade (optional, can add dynamically)
+            candle_interval: Candle interval in minutes (1 or 5)
+            extended_hours: Enable premarket/afterhours data
+            position_amount: Fixed position size in dollars (if None, uses 25% of buying power)
+            max_symbols: Maximum number of symbols to track
+            remove_on_pattern_fail: If True, remove symbol when pattern fails (PULLBACK -> SCANNING)
         """
         self.client_wrapper = client_wrapper
         self.broker = broker
-        self.symbols = symbols
+        self.symbols = symbols or []
+        self.candle_interval = candle_interval
+        self.extended_hours = extended_hours
+        self.position_amount = position_amount
+        self.max_symbols = max_symbols
+        self.remove_on_pattern_fail = remove_on_pattern_fail
         
         self.strategies: Dict[str, BullFlagLiveStrategy] = {}
         self.running = False
-        self._last_processed_slot: Dict[str, int] = {}  # slot = minutes since market open / 5
+        self._last_processed_slot: Dict[str, int] = {}  # slot = minutes since market open / interval
+        
+        # Candle data storage for each symbol (for pattern failure detection)
+        self.candle_data: Dict[str, List[Candle]] = {}
         
         # Initialize strategy for each symbol
-        for symbol in symbols:
+        for symbol in self.symbols:
             self.strategies[symbol] = BullFlagLiveStrategy(
                 symbol=symbol,
                 on_signal=self._handle_signal
             )
+            self.candle_data[symbol] = []
         
-        logger.info(f"Engine initialized for {len(symbols)} symbols")
+        logger.info(
+            f"Engine initialized: {len(self.symbols)} symbols, "
+            f"{candle_interval}min candles, extended_hours={extended_hours}"
+        )
     
     @property
     def client(self) -> Client:
@@ -88,10 +111,15 @@ class LiveTradingEngine:
         
         try:
             if signal.action == "BUY":
-                # Calculate position size based on available buying power
-                buying_power = self.broker.get_buying_power()
-                max_position_value = buying_power * 0.25  # Use 25% of buying power per trade
-                quantity = int(max_position_value / signal.price)
+                # Calculate position size
+                if self.position_amount is not None:
+                    # Use fixed position amount
+                    quantity = int(self.position_amount / signal.price)
+                else:
+                    # Use 25% of buying power per trade
+                    buying_power = self.broker.get_buying_power()
+                    max_position_value = buying_power * 0.25
+                    quantity = int(max_position_value / signal.price)
                 
                 if quantity < 1:
                     logger.info(f"Insufficient buying power for {signal.symbol}")
@@ -136,14 +164,21 @@ class LiveTradingEngine:
         return False
     
     def _datetime_to_slot(self, dt: datetime) -> int:
-        """Convert datetime to slot number (minutes since market open / 5)."""
-        market_open = dt.replace(hour=9, minute=30, second=0, microsecond=0)
+        """Convert datetime to slot number (minutes since market open / interval)."""
+        if self.extended_hours:
+            # For extended hours, use 4:00 AM as start
+            market_open = dt.replace(hour=4, minute=0, second=0, microsecond=0)
+        else:
+            market_open = dt.replace(hour=9, minute=30, second=0, microsecond=0)
         minutes_since_open = int((dt - market_open).total_seconds() / 60)
-        return minutes_since_open // 5
+        return minutes_since_open // self.candle_interval
     
     def _slot_to_time_str(self, slot: int) -> str:
-        """Convert slot number to time string (e.g., slot 0 -> '09:30')."""
-        minutes = 9 * 60 + 30 + slot * 5
+        """Convert slot number to time string."""
+        if self.extended_hours:
+            minutes = 4 * 60 + slot * self.candle_interval
+        else:
+            minutes = 9 * 60 + 30 + slot * self.candle_interval
         return f"{minutes // 60:02d}:{minutes % 60:02d}"
     
     def _fetch_quotes(self, symbols: List[str]) -> Dict[str, float]:
@@ -177,7 +212,7 @@ class LiveTradingEngine:
     
     def _fetch_candles(self, symbol: str) -> List[Candle]:
         """
-        Fetch 5-minute candles for a symbol.
+        Fetch candles for a symbol at the configured interval.
         
         Uses slot-based tracking to ensure complete candles are included and
         incomplete ones excluded. Retries on API failure or missing slots.
@@ -200,16 +235,29 @@ class LiveTradingEngine:
         
         for attempt in range(self.MAX_RETRIES):
             try:
-                # Start from market open today to limit data
-                market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                # Start from market/premarket open today
+                if self.extended_hours:
+                    market_open = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
+                else:
+                    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
                 
-                resp = self.client.get_price_history_every_five_minutes(
-                    symbol,
-                    start_datetime=market_open,
-                    end_datetime=None,
-                    need_extended_hours_data=False,
-                    need_previous_close=False
-                )
+                # Select API method based on interval
+                if self.candle_interval == 1:
+                    resp = self.client.get_price_history_every_minute(
+                        symbol,
+                        start_datetime=market_open,
+                        end_datetime=None,
+                        need_extended_hours_data=self.extended_hours,
+                        need_previous_close=False
+                    )
+                else:
+                    resp = self.client.get_price_history_every_five_minutes(
+                        symbol,
+                        start_datetime=market_open,
+                        end_datetime=None,
+                        need_extended_hours_data=self.extended_hours,
+                        need_previous_close=False
+                    )
                 
                 if resp.status_code != httpx.codes.OK:
                     logger.info(f"Failed to get candles for {symbol}: {resp.status_code}")
@@ -279,8 +327,8 @@ class LiveTradingEngine:
         return []
     
     def _process_candles(self):
-        """Fetch and process 5-minute candles for all symbols."""
-        for symbol in self.symbols:
+        """Fetch and process candles for all tracked symbols."""
+        for symbol in list(self.strategies.keys()):
             candles = self._fetch_candles(symbol)
             for candle in candles:
                 candle_time_str = candle.timestamp.strftime("%H:%M")
@@ -290,6 +338,158 @@ class LiveTradingEngine:
                 )
                 strategy = self.strategies[symbol]
                 strategy.process_candle(candle)
+                
+                # Store candle data for this symbol
+                if symbol in self.candle_data:
+                    self.candle_data[symbol].append(candle)
+        
+        # Check for pattern failures after processing all candles
+        if self.remove_on_pattern_fail:
+            self._check_pattern_failed()
+    
+    def _check_pattern_failed(self) -> None:
+        """
+        Remove symbols where pattern failed (PULLBACK -> SCANNING).
+        
+        When a strategy was in PULLBACK but transitions back to SCANNING,
+        it means the pattern failed. We stop tracking to catch only first pullback.
+        """
+        
+        to_remove = []
+        for symbol, strategy in self.strategies.items():
+            # Check if pattern failed: was in PULLBACK, now back to SCANNING
+            if (strategy.state == StrategyState.SCANNING and 
+                hasattr(strategy, 'prev_state') and 
+                strategy.prev_state == StrategyState.PULLBACK):
+                to_remove.append(symbol)
+        
+        for symbol in to_remove:
+            logger.info(f"Pattern failed for {symbol}, removing from tracking")
+            del self.strategies[symbol]
+            if symbol in self.candle_data:
+                del self.candle_data[symbol]
+            if symbol in self._last_processed_slot:
+                del self._last_processed_slot[symbol]
+            if symbol in self.symbols:
+                self.symbols.remove(symbol)
+    
+    def add_symbol(self, symbol: str, replay_minutes: int = 10) -> bool:
+        """
+        Add a symbol to track. Replays last N minutes of candles to catch up.
+        
+        Args:
+            symbol: Stock symbol to add
+            replay_minutes: Minutes of historical candles to replay
+            
+        Returns:
+            True if symbol was added, False if already tracking or at capacity
+        """
+        if symbol in self.strategies:
+            logger.info(f"Already tracking {symbol}")
+            return False
+        
+        if len(self.strategies) >= self.max_symbols:
+            logger.info(f"At max capacity ({self.max_symbols}), cannot add {symbol}")
+            return False
+        
+        logger.info(f"Adding {symbol} with {replay_minutes}min replay...")
+        
+        # Fetch historical candles for replay
+        candles = self._fetch_history_for_replay(symbol, replay_minutes)
+        
+        # Create strategy and replay candles
+        strategy = BullFlagLiveStrategy(
+            symbol=symbol,
+            on_signal=self._handle_signal
+        )
+        
+        for candle in candles:
+            candle_time_str = candle.timestamp.strftime("%H:%M")
+            logger.info(
+                f"[REPLAY {candle_time_str}] {symbol}: O={candle.open:.2f} H={candle.high:.2f} "
+                f"L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}"
+            )
+            strategy.process_candle(candle)
+        
+        # Add to tracking
+        self.strategies[symbol] = strategy
+        self.candle_data[symbol] = list(candles)
+        if symbol not in self.symbols:
+            self.symbols.append(symbol)
+        
+        # Set last processed slot to current to avoid re-fetching replayed candles
+        now_et = datetime.now(self.ET)
+        self._last_processed_slot[symbol] = self._datetime_to_slot(now_et) - 1
+        
+        logger.info(f"Added {symbol}, state={strategy.state.value}, replayed {len(candles)} candles")
+        return True
+    
+    def _fetch_history_for_replay(self, symbol: str, minutes: int) -> List[Candle]:
+        """
+        Fetch historical candles for replay when adding a new symbol.
+        
+        Args:
+            symbol: Stock symbol
+            minutes: How many minutes of history to fetch
+            
+        Returns:
+            List of Candles (oldest first)
+        """
+        now_et = datetime.now(self.ET)
+        
+        # Calculate start time (minutes ago)
+        from datetime import timedelta
+        start_time = now_et - timedelta(minutes=minutes + self.candle_interval)
+        
+        try:
+            if self.candle_interval == 1:
+                resp = self.client.get_price_history_every_minute(
+                    symbol,
+                    start_datetime=start_time,
+                    end_datetime=None,
+                    need_extended_hours_data=self.extended_hours,
+                    need_previous_close=False
+                )
+            else:
+                resp = self.client.get_price_history_every_five_minutes(
+                    symbol,
+                    start_datetime=start_time,
+                    end_datetime=None,
+                    need_extended_hours_data=self.extended_hours,
+                    need_previous_close=False
+                )
+            
+            if resp.status_code != httpx.codes.OK:
+                logger.info(f"Failed to fetch history for {symbol}: {resp.status_code}")
+                return []
+            
+            data = resp.json()
+            candles = data.get("candles", [])
+            
+            result = []
+            current_slot = self._datetime_to_slot(now_et)
+            
+            for c in candles:
+                candle_time = datetime.fromtimestamp(c["datetime"] / 1000, tz=self.ET)
+                candle_slot = self._datetime_to_slot(candle_time)
+                
+                # Only include complete candles (not the current incomplete one)
+                if candle_slot < current_slot:
+                    result.append(Candle(
+                        timestamp=candle_time,
+                        open=float(c["open"]),
+                        high=float(c["high"]),
+                        low=float(c["low"]),
+                        close=float(c["close"]),
+                        volume=int(c["volume"])
+                    ))
+            
+            result.sort(key=lambda c: c.timestamp)
+            return result
+            
+        except Exception as e:
+            logger.info(f"Error fetching history for {symbol}: {e}")
+            return []
     
     def _check_realtime_triggers(self):
         """Check real-time prices for breakout/stop loss triggers."""
@@ -340,7 +540,7 @@ class LiveTradingEngine:
                     logger.info("Market closed - stopping engine")
                     break
                 
-                # Poll candles at each 5-minute boundary
+                # Poll candles at each candle boundary
                 current_slot = self._datetime_to_slot(now_et)
                 if current_slot != last_poll_slot:
                     self._process_candles()
@@ -351,9 +551,10 @@ class LiveTradingEngine:
                     self._check_realtime_triggers()
                     time.sleep(self.REALTIME_POLL_INTERVAL)
                 else:
-                    # Sleep until next 5-minute boundary
-                    seconds_into_slot = now_et.minute % 5 * 60 + now_et.second
-                    sleep_time = self.CANDLE_POLL_INTERVAL - seconds_into_slot + 5  # +5s buffer for candle to be ready
+                    # Sleep until next candle boundary
+                    candle_poll_interval = self.candle_interval * 60
+                    seconds_into_slot = (now_et.minute % self.candle_interval) * 60 + now_et.second
+                    sleep_time = candle_poll_interval - seconds_into_slot + 5  # +5s buffer for candle to be ready
                     time.sleep(max(1, sleep_time))
                     
         except KeyboardInterrupt:
@@ -374,269 +575,3 @@ class LiveTradingEngine:
             self.broker.print_summary()
         
         logger.info("Engine stopped")
-
-
-# ============================================================================
-# Premarket News Engine
-# ============================================================================
-
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
-
-
-@dataclass
-class PremarketPosition:
-    """Tracks a premarket position."""
-    symbol: str
-    entry_price: float
-    quantity: int
-    stop_loss: float
-
-
-class PremarketNewsEngine:
-    """
-    Premarket news gap trading engine.
-    
-    Manages positions only - scanning is handled externally by main_premarket.py.
-    Reuses broker, client, and logging from LiveTradingEngine patterns.
-    """
-    
-    POSITION_AMOUNT = 10000  # $10k per position
-    STOP_LOSS_PCT = 0.05     # 5% stop loss
-    LIMIT_BUFFER = 1.005     # Buy at ask + 0.5%
-    
-    ET = ZoneInfo("America/New_York")
-    
-    def __init__(self, client_wrapper: AutoRefreshSchwabClient, broker: IBroker):
-        """
-        Initialize PremarketNewsEngine.
-        
-        Args:
-            client_wrapper: AutoRefreshSchwabClient for API calls
-            broker: IBroker implementation (PaperBroker or SchwabBroker)
-        """
-        self.client_wrapper = client_wrapper
-        self.broker = broker
-        self.positions: Dict[str, PremarketPosition] = {}
-        self._logger = get_logger("PREMARKET")
-    
-    @property
-    def client(self) -> Client:
-        """Get the current Schwab client."""
-        return self.client_wrapper.client
-    
-    def add_positions(self, symbols: List[str]) -> None:
-        """
-        Buy symbols in parallel. Skip if already in position.
-        
-        Args:
-            symbols: List of symbols to buy
-        """
-        new_symbols = [s for s in symbols if s not in self.positions]
-        
-        if not new_symbols:
-            return
-        
-        self._logger.info(f"Adding positions: {new_symbols}")
-        
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            executor.map(self._place_buy_order, new_symbols)
-    
-    def _place_buy_order(self, symbol: str) -> None:
-        """
-        Place limit order at ask + 0.5% and track position.
-        
-        Args:
-            symbol: Symbol to buy
-        """
-        try:
-            # Fetch current quote
-            quote = self._fetch_quote(symbol)
-            
-            if quote is None:
-                self._logger.info(f"  {symbol}: Failed to get quote")
-                return
-            
-            ask_price = quote.get("askPrice", 0)
-            
-            if ask_price <= 0:
-                # Fallback to last price if ask not available
-                ask_price = quote.get("lastPrice", 0)
-            
-            if ask_price <= 0:
-                self._logger.info(f"  {symbol}: No valid price")
-                return
-            
-            # Calculate limit price (ask + 0.5%)
-            limit_price = round(ask_price * self.LIMIT_BUFFER, 2)
-            quantity = int(self.POSITION_AMOUNT / limit_price)
-            
-            if quantity < 1:
-                self._logger.info(f"  {symbol}: Quantity too small")
-                return
-            
-            # Place order
-            order_id = self.broker.place_order(
-                symbol=symbol,
-                side=OrderSide.BUY,
-                quantity=quantity,
-                order_type=OrderType.LIMIT,
-                limit_price=limit_price,
-                reason="News gap entry"
-            )
-            
-            # Track position
-            stop_loss = round(limit_price * (1 - self.STOP_LOSS_PCT), 2)
-            self.positions[symbol] = PremarketPosition(
-                symbol=symbol,
-                entry_price=limit_price,
-                quantity=quantity,
-                stop_loss=stop_loss
-            )
-            
-            self._logger.info(
-                f"  {symbol}: BUY {quantity} @ ${limit_price:.2f} "
-                f"(stop: ${stop_loss:.2f}) - {order_id}"
-            )
-            
-        except Exception as e:
-            self._logger.info(f"  {symbol}: Error placing order - {e}")
-    
-    def _fetch_quote(self, symbol: str) -> Optional[dict]:
-        """
-        Fetch quote for a single symbol.
-        
-        Args:
-            symbol: Ticker symbol
-            
-        Returns:
-            Quote dict or None
-        """
-        try:
-            resp = self.client.get_quote(symbol)
-            
-            if resp.status_code != httpx.codes.OK:
-                return None
-            
-            data = resp.json()
-            return data.get(symbol, {}).get("quote", {})
-            
-        except Exception as e:
-            self._logger.info(f"Error fetching quote for {symbol}: {e}")
-            return None
-    
-    def _fetch_quotes(self, symbols: List[str]) -> Dict[str, float]:
-        """
-        Fetch quotes for multiple symbols.
-        
-        Args:
-            symbols: List of symbols
-            
-        Returns:
-            Dict mapping symbol to last price
-        """
-        prices = {}
-        
-        if not symbols:
-            return prices
-        
-        try:
-            resp = self.client.get_quotes(symbols)
-            
-            if resp.status_code != httpx.codes.OK:
-                return prices
-            
-            data = resp.json()
-            for symbol, quote_data in data.items():
-                quote = quote_data.get("quote", {})
-                price = quote.get("lastPrice", 0)
-                if price > 0:
-                    prices[symbol] = price
-                    
-        except Exception as e:
-            self._logger.info(f"Error fetching quotes: {e}")
-        
-        return prices
-    
-    def check_stop_losses(self) -> None:
-        """
-        Check stop losses for all positions.
-        Only call after 9:30 AM when market is open.
-        """
-        if not self.positions:
-            return
-        
-        prices = self._fetch_quotes(list(self.positions.keys()))
-        
-        for symbol, price in prices.items():
-            pos = self.positions.get(symbol)
-            
-            if pos and price <= pos.stop_loss:
-                self._logger.info(
-                    f"  {symbol}: Stop loss triggered @ ${price:.2f} "
-                    f"(stop: ${pos.stop_loss:.2f})"
-                )
-                self._place_sell_order(symbol, "Stop loss triggered")
-    
-    def _place_sell_order(self, symbol: str, reason: str) -> None:
-        """
-        Place sell order for a position.
-        
-        Args:
-            symbol: Symbol to sell
-            reason: Reason for selling
-        """
-        pos = self.positions.get(symbol)
-        
-        if pos is None:
-            return
-        
-        try:
-            # Use market order for exits (faster execution)
-            # Note: For premarket, we might need limit order
-            quote = self._fetch_quote(symbol)
-            bid_price = quote.get("bidPrice", 0) if quote else 0
-            
-            if bid_price <= 0:
-                bid_price = quote.get("lastPrice", pos.entry_price) if quote else pos.entry_price
-            
-            order_id = self.broker.place_order(
-                symbol=symbol,
-                side=OrderSide.SELL,
-                quantity=pos.quantity,
-                order_type=OrderType.LIMIT,
-                limit_price=round(bid_price * 0.995, 2),  # Bid - 0.5% for quick fill
-                reason=reason
-            )
-            
-            # Remove from positions
-            del self.positions[symbol]
-            
-            self._logger.info(f"  {symbol}: SELL {pos.quantity} @ ${bid_price:.2f} - {order_id}")
-            
-        except Exception as e:
-            self._logger.info(f"  {symbol}: Error placing sell order - {e}")
-    
-    def exit_all(self) -> None:
-        """
-        Exit all positions. Call at 9:35 AM.
-        """
-        if not self.positions:
-            self._logger.info("No positions to exit")
-            return
-        
-        self._logger.info(f"Exiting all positions: {list(self.positions.keys())}")
-        
-        symbols = list(self.positions.keys())
-        
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            executor.map(
-                lambda s: self._place_sell_order(s, "Time exit 9:35 AM"),
-                symbols
-            )
-    
-    def print_summary(self) -> None:
-        """Print position summary."""
-        if hasattr(self.broker, 'print_summary'):
-            self.broker.print_summary()
-
