@@ -35,6 +35,7 @@ from providers.schwab_lib import SchwabProvider
 from scanner.finviz_news import FinvizNewsScanner
 from live_engine import LiveTradingEngine
 from logger import get_logger, enable_file_logging
+from utils import speak_symbols
 
 
 ET = ZoneInfo("America/New_York")
@@ -132,6 +133,10 @@ def main():
                     # Skip symbols already being tracked
                     skip_symbols = set(engine.strategies.keys())
                     confirmed = scanner.scan(skip=skip_symbols)
+                    
+                    # Notify with sound if stocks confirmed
+                    if confirmed:
+                        speak_symbols(confirmed)
                     
                     # Add confirmed symbols
                     for symbol in confirmed:

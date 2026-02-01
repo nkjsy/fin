@@ -6,6 +6,7 @@ Usage:
     python test_premarket.py confirm      # Test Schwab confirmation timing
     python test_premarket.py scan         # Test full scan timing
     python test_premarket.py history      # Test 1-min history with extended hours
+    python test_premarket.py tts          # Test TTS notification
     python test_premarket.py all          # Run all tests
 """
 
@@ -13,9 +14,8 @@ import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
+from utils import speak_symbols
 from finviz.screener import Screener
-
 from scanner.finviz_news import FinvizNewsScanner, FINVIZ_NEWS_URL
 from client import AutoRefreshSchwabClient
 from providers.schwab_lib import SchwabProvider
@@ -188,12 +188,36 @@ def test_history_extended():
         logger.info(f"  Premarket candles: {len(premarket_df)}")
 
 
+def test_tts():
+    """
+    Test TTS notification runs in background (non-blocking).
+    Verifies speak_symbols() returns immediately while audio plays.
+    """    
+    logger.info("=" * 60)
+    logger.info("Test: TTS Background Execution")
+    logger.info("=" * 60)
+    
+    logger.info("Testing that speak_symbols() is non-blocking...")
+    logger.info("You should hear 'Confirmed: AAPL, MSFT' repeated 3 times")
+    
+    start = time.time()
+    speak_symbols(["AAPL", "MSFT"])
+    elapsed = time.time() - start
+    logger.info(f"speak_symbols() returned in {elapsed:.4f} sec")
+    
+    # Wait for audio to finish playing (daemon thread dies when main exits)
+    logger.info("Waiting 15 seconds for audio to complete...")
+    time.sleep(15)
+    logger.info("Done! Did you hear the announcement 3 times?")
+
+
 if __name__ == "__main__":
     tests = {
         "finviz": test_finviz_scrape,
         "confirm": test_confirm_timing,
         "scan": test_full_scan,
         "history": test_history_extended,
+        "tts": test_tts,
     }
     
     if len(sys.argv) > 1:

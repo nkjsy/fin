@@ -8,3 +8,4 @@ openpyxl
 requests
 schwab-py
 finviz
+pyttsx3

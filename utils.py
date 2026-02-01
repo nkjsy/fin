@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 from schwab.client import Client
 import httpx
+import pyttsx3
+import threading
 from client import AutoRefreshSchwabClient
 from logger import get_logger
 
@@ -269,6 +271,36 @@ def calculate_start_date(client, period: str, end_dt: datetime) -> datetime:
     
     # Fallback to 1 year
     return end_dt - timedelta(days=365)
+
+def speak_symbols(symbols: list) -> None:
+    """
+    Announce confirmed symbols using text-to-speech in background thread.
+    Non-blocking - returns immediately while audio plays.
+    
+    Args:
+        symbols: List of stock symbols to announce
+    """
+    if not symbols:
+        return
+    
+    def _speak():
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 150)  # Speed of speech
+            text = f"Confirmed: {', '.join(symbols)}"
+            
+            # Build message with pauses between repetitions
+            full_text = ". . . ".join([text] * 3)
+            engine.say(full_text)
+            engine.runAndWait()
+            
+            engine.stop()
+        except Exception as e:
+            logger.info(f"TTS error: {e}")
+    
+    # Run in background thread to avoid blocking main loop
+    thread = threading.Thread(target=_speak, daemon=True)
+    thread.start()
 
 
 if __name__ == "__main__":
