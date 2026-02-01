@@ -16,6 +16,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from utils import speak_symbols
 from finviz.screener import Screener
+from finviz.helper_functions.error_handling import NoResults
 from scanner.finviz_news import FinvizNewsScanner, FINVIZ_NEWS_URL
 from client import AutoRefreshSchwabClient
 from providers.schwab_lib import SchwabProvider
@@ -59,6 +60,10 @@ def test_finviz_scrape():
         else:
             logger.info("⚠ Finviz scrape is SLOW - consider background thread")
             
+    except NoResults:
+        elapsed = time.time() - start
+        logger.info(f"No results in {elapsed:.2f} sec - no stocks with news in last 5 min matching criteria")
+        logger.info("✓ Finviz connection is working")
     except Exception as e:
         elapsed = time.time() - start
         logger.error(f"Error after {elapsed:.2f} sec: {e}")
@@ -78,6 +83,9 @@ def test_confirm_timing():
     try:
         stock_list = Screener.init_from_url(FINVIZ_NEWS_URL)
         symbols = [stock["Ticker"] for stock in stock_list]
+    except NoResults:
+        logger.info("No candidates from Finviz - no stocks with news in last 5 min")
+        return
     except Exception as e:
         logger.error(f"Error fetching from Finviz: {e}")
         return

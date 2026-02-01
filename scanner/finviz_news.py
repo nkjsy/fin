@@ -10,6 +10,7 @@ from typing import List, Optional, Set
 
 import pandas as pd
 from finviz.screener import Screener
+from finviz.helper_functions.error_handling import NoResults
 
 from scanner.base import BaseScanner, ET
 from providers.schwab_lib import SchwabProvider
@@ -19,7 +20,7 @@ from logger import get_logger
 logger = get_logger("SCANNER")
 
 # Finviz screener: news in last 5 min, price <= $50, float < 100M
-FINVIZ_NEWS_URL = "https://finviz.com/screener.ashx?v=111&f=news_date_prevminutes5,sh_float_u100,sh_price_u50"
+FINVIZ_NEWS_URL = "https://finviz.com/screener.ashx?v=111&f=news_date_prevminutes5%2Csh_float_u100%2Csh_price_u50&ft=6"
 
 
 class FinvizNewsScanner(BaseScanner):
@@ -115,8 +116,12 @@ class FinvizNewsScanner(BaseScanner):
             stock_list = Screener.init_from_url(FINVIZ_NEWS_URL)
             symbols = {stock["Ticker"] for stock in stock_list}
             return symbols
+        except NoResults:
+            # No stocks match the filter criteria (normal during off-hours or quiet periods)
+            logger.info("Finviz: No stocks with news in last 5 min matching criteria")
+            return set()
         except Exception as e:
-            logger.info(f"Error scraping Finviz: {e}")
+            logger.error(f"Error scraping Finviz: {e}")
             return set()
     
     def _confirm_parallel(self, symbols: Set[str]) -> List[str]:
