@@ -155,7 +155,7 @@ def test_history_extended():
     provider = get_provider()
     
     # Test with a known active stock
-    test_symbols = ["SPY", "QQQ", "AAPL"]
+    test_symbols = ["SPY", "ETON"]
     
     for symbol in test_symbols:
         logger.info(f"\nFetching 2d 1-min history for {symbol}...")
@@ -175,9 +175,9 @@ def test_history_extended():
         
         logger.info(f"  {symbol}: {len(df)} candles in {elapsed:.2f} sec")
         
-        # Show last 5 candles
-        logger.info(f"  Last 5 candles:")
-        for _, row in df.tail(5).iterrows():
+        # Show last 20 candles
+        logger.info(f"  Last 20 candles:")
+        for _, row in df.tail(20).iterrows():
             dt = row["Datetime"]
             logger.info(f"    {dt}: O={row['Open']:.2f} H={row['High']:.2f} L={row['Low']:.2f} C={row['Close']:.2f} V={row['Volume']}")
         
