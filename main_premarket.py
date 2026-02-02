@@ -92,7 +92,8 @@ def main():
         candle_interval=1,
         extended_hours=True,
         position_amount=POSITION_AMOUNT,
-        max_symbols=MAX_SYMBOLS
+        max_symbols=MAX_SYMBOLS,
+        remove_after_exit=True  # Remove symbols after pattern fail or position close
     )
     
     try:

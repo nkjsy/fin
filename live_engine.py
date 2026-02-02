@@ -52,7 +52,7 @@ class LiveTradingEngine:
         extended_hours: bool = False,
         position_amount: Optional[float] = None,
         max_symbols: int = 10,
-        remove_on_pattern_fail: bool = False
+        remove_after_exit: bool = False
     ):
         """
         Initialize LiveTradingEngine.
@@ -65,7 +65,7 @@ class LiveTradingEngine:
             extended_hours: Enable premarket/afterhours data
             position_amount: Fixed position size in dollars (if None, uses 25% of buying power)
             max_symbols: Maximum number of symbols to track
-            remove_on_pattern_fail: If True, remove symbol when pattern fails (PULLBACK -> SCANNING)
+            remove_after_exit: If True, remove symbol after any exit (pattern fail or position close)
         """
         self.client_wrapper = client_wrapper
         self.broker = broker
@@ -74,7 +74,7 @@ class LiveTradingEngine:
         self.extended_hours = extended_hours
         self.position_amount = position_amount
         self.max_symbols = max_symbols
-        self.remove_on_pattern_fail = remove_on_pattern_fail
+        self.remove_after_exit = remove_after_exit
         
         self.strategies: Dict[str, BullFlagLiveStrategy] = {}
         self.running = False
@@ -343,9 +343,10 @@ class LiveTradingEngine:
                 if symbol in self.candle_data:
                     self.candle_data[symbol].append(candle)
         
-        # Check for pattern failures after processing all candles
-        if self.remove_on_pattern_fail:
+        # Check for exits after processing all candles
+        if self.remove_after_exit:
             self._check_pattern_failed()
+            self._check_position_exited()
     
     def _check_pattern_failed(self) -> None:
         """
@@ -365,13 +366,42 @@ class LiveTradingEngine:
         
         for symbol in to_remove:
             logger.info(f"Pattern failed for {symbol}, removing from tracking")
+            self._remove_symbol(symbol)
+    
+    def _check_position_exited(self) -> None:
+        """
+        Remove symbols where position was exited (IN_POSITION -> SCANNING).
+        
+        After a sell (stop loss or take profit), remove the symbol from tracking
+        to avoid re-entering the same stock in the same session.
+        """
+        to_remove = []
+        for symbol, strategy in self.strategies.items():
+            # Check if position exited: was IN_POSITION, now back to SCANNING
+            if (strategy.state == StrategyState.SCANNING and 
+                hasattr(strategy, 'prev_state') and 
+                strategy.prev_state == StrategyState.IN_POSITION):
+                to_remove.append(symbol)
+        
+        for symbol in to_remove:
+            logger.info(f"Position exited for {symbol}, removing from tracking")
+            self._remove_symbol(symbol)
+    
+    def _remove_symbol(self, symbol: str) -> None:
+        """
+        Remove a symbol from all tracking data structures.
+        
+        Args:
+            symbol: Symbol to remove
+        """
+        if symbol in self.strategies:
             del self.strategies[symbol]
-            if symbol in self.candle_data:
-                del self.candle_data[symbol]
-            if symbol in self._last_processed_slot:
-                del self._last_processed_slot[symbol]
-            if symbol in self.symbols:
-                self.symbols.remove(symbol)
+        if symbol in self.candle_data:
+            del self.candle_data[symbol]
+        if symbol in self._last_processed_slot:
+            del self._last_processed_slot[symbol]
+        if symbol in self.symbols:
+            self.symbols.remove(symbol)
     
     def add_symbol(self, symbol: str, replay_minutes: int = 10) -> bool:
         """
@@ -517,6 +547,10 @@ class LiveTradingEngine:
                 strategy.check_breakout(price)
             elif strategy.state == StrategyState.IN_POSITION:
                 strategy.check_stop_loss(price)
+        
+        # Remove symbols where position was exited via real-time stop loss
+        if self.remove_after_exit:
+            self._check_position_exited()
     
     def start(self):
         """
