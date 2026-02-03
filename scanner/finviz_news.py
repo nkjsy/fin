@@ -6,6 +6,7 @@ Returns only confirmed symbols ready to buy.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from typing import List, Optional, Set
 
 import pandas as pd
@@ -29,15 +30,15 @@ class FinvizNewsScanner(BaseScanner):
     Returns only confirmed symbols ready to buy.
     
     Confirmation criteria:
-    - Gain >= 3% vs price 10 minutes ago
+    - Gain >= 3% vs previous day close
     - Relative volume >= 5x vs yesterday same-time premarket
-    - 10 consecutive 1-minute candles in last 10 min (EXTO eligible)
+    - At least 3 candles in last 3 min (confirms active trading)
     """
     
     # Confirmation thresholds
-    MIN_GAIN_PCT = 0.03  # 3% minimum gain vs 10 min ago
+    MIN_GAIN_PCT = 0.03  # 3% minimum gain vs prev day close
     MIN_REL_VOLUME = 5.0  # 5x relative volume
-    MIN_CANDLES = 10  # Require 10 consecutive candles in last 10 min
+    MIN_CANDLES = 3  # Require 3 candles in last 3 min
     
     # Thread pool size for parallel confirmation (matches max positions)
     MAX_WORKERS = 5
@@ -150,50 +151,53 @@ class FinvizNewsScanner(BaseScanner):
             Symbol if confirmed, None otherwise
         """
         try:
-            # Fetch 2 days of 1-minute data with extended hours
-            df = self.provider.get_history(
+            # Fetch 2 days of 1-minute data with extended hours and previous close
+            df, prev_close = self.provider.get_history(
                 symbol,
                 interval="minute1",
                 period="2d",
-                need_extended_hours_data=True
+                need_extended_hours_data=True,
+                need_previous_close=True
             )
             
             if df.empty:
                 logger.info(f"  {symbol}: No data")
                 return None
             
-            # Drop the last candle (may be incomplete)
-            df = df.iloc[:-1]
+            if prev_close <= 0:
+                logger.info(f"  {symbol}: No previous close data")
+                return None
             
-            # Check for 10 consecutive candles at least 
+            # Keep last candle even if incomplete - we want recent activity
+            # Check for minimum candles in last 3 min (confirms active trading after news)
             if len(df) < self.MIN_CANDLES:
                 logger.info(f"  {symbol}: Only {len(df)} candles total, need {self.MIN_CANDLES}")
                 return None
             
-            # Get last 10 candles
-            last_10 = df.iloc[-self.MIN_CANDLES:]
+            # Get last 3 candles
+            last_candles = df.iloc[-self.MIN_CANDLES:]
             
-            # Verify consecutive 1-minute intervals in last 10 minutes (EXTO eligible)
-            time_diffs = last_10["Datetime"].diff().iloc[1:]  # Skip first NaT
-            expected_diff = pd.Timedelta(minutes=1)
-            if not all(time_diffs == expected_diff):
-                logger.info(f"  {symbol}: Candles not consecutive in last 10 min")
+            # Verify candles are within last 3 minutes (allow gaps but must be recent)
+            now = datetime.now(ET)
+            oldest_allowed = now - timedelta(minutes=self.MIN_CANDLES)
+            oldest_candle_time = last_candles["Datetime"].iloc[0]
+            if oldest_candle_time < oldest_allowed:
+                logger.info(f"  {symbol}: No candles in last {self.MIN_CANDLES} min")
                 return None
             
-            # Get current price and price 10 min ago
-            current_price = last_10["Close"].iloc[-1]
-            price_10min_ago = last_10["Close"].iloc[0]
+            # Get current price
+            current_price = last_candles["Close"].iloc[-1]
             
             # Filter by minimum price ($2)
             if current_price <= 2:
                 logger.info(f"  {symbol}: Price ${current_price:.2f} <= $2")
                 return None
             
-            # Calculate gain % vs 10 minutes ago
-            gain_pct = (current_price - price_10min_ago) / price_10min_ago
+            # Calculate gain % vs previous day close
+            gain_pct = (current_price - prev_close) / prev_close
             
             if gain_pct < self.MIN_GAIN_PCT:
-                logger.info(f"  {symbol}: Gain {gain_pct*100:.1f}% < {self.MIN_GAIN_PCT*100}% (${price_10min_ago:.2f} -> ${current_price:.2f})")
+                logger.info(f"  {symbol}: Gain {gain_pct*100:.1f}% < {self.MIN_GAIN_PCT*100}% (prev close ${prev_close:.2f} -> ${current_price:.2f})")
                 return None
             
             # Confirm relative volume vs yesterday same-time (uses base class method)
@@ -203,7 +207,7 @@ class FinvizNewsScanner(BaseScanner):
                 logger.info(f"  {symbol}: RelVol {rel_vol:.1f}x < {self.MIN_REL_VOLUME}x" if rel_vol else f"  {symbol}: Could not calculate rel volume")
                 return None
             
-            logger.info(f"  {symbol}: CONFIRMED (${price_10min_ago:.2f} -> ${current_price:.2f}, gain={gain_pct*100:.1f}%, relVol={rel_vol:.1f}x)")
+            logger.info(f"  {symbol}: CONFIRMED (prev ${prev_close:.2f} -> ${current_price:.2f}, gain={gain_pct*100:.1f}%, relVol={rel_vol:.1f}x)")
             return symbol
             
         except Exception as e:
