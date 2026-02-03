@@ -63,7 +63,7 @@ class FinvizNewsScanner(BaseScanner):
             skip: Set of symbols to skip (e.g., already in position)
             
         Returns:
-            List of confirmed symbols ready to buy
+            List of confirmed symbols ready to buy (top MAX_WORKERS by gain %)
         """
         skip = skip or set()
         
@@ -78,10 +78,6 @@ class FinvizNewsScanner(BaseScanner):
         # Step 2: Filter out symbols to skip or currently confirming (set operations)
         to_confirm = candidates - skip - self.confirming
         
-        # Limit to MAX_WORKERS candidates
-        if len(to_confirm) > self.MAX_WORKERS:
-            to_confirm = set(list(to_confirm)[:self.MAX_WORKERS])
-        
         if not to_confirm:
             logger.info("No new candidates to confirm")
             return []
@@ -92,18 +88,24 @@ class FinvizNewsScanner(BaseScanner):
         self.confirming |= to_confirm
         
         try:
-            # Step 4: Parallel confirmation
-            confirmed = self._confirm_parallel(to_confirm)
+            # Step 4: Parallel confirmation - returns list of (symbol, gain_pct) tuples
+            confirmed_with_gains = self._confirm_parallel(to_confirm)
             
-            if confirmed:
-                logger.info(f"Confirmed: {confirmed}")
-            else:
+            if not confirmed_with_gains:
                 logger.info("No candidates confirmed")
+                return []
             
-            return confirmed
+            # Step 5: Sort by gain % descending and take top MAX_WORKERS
+            confirmed_with_gains.sort(key=lambda x: x[1], reverse=True)
+            top_confirmed = confirmed_with_gains[:self.MAX_WORKERS]
+            
+            symbols = [sym for sym, _ in top_confirmed]
+            logger.info(f"Confirmed {len(confirmed_with_gains)}, returning top {len(symbols)}: {symbols}")
+            
+            return symbols
             
         finally:
-            # Step 5: Clean up confirming set (set difference)
+            # Step 6: Clean up confirming set (set difference)
             self.confirming -= to_confirm
     
     def _scrape_finviz(self) -> Set[str]:
@@ -125,7 +127,7 @@ class FinvizNewsScanner(BaseScanner):
             logger.error(f"Error scraping Finviz: {e}")
             return set()
     
-    def _confirm_parallel(self, symbols: Set[str]) -> List[str]:
+    def _confirm_parallel(self, symbols: Set[str]) -> List[tuple]:
         """
         Confirm candidates in parallel using ThreadPoolExecutor.
         
@@ -133,14 +135,14 @@ class FinvizNewsScanner(BaseScanner):
             symbols: Set of symbols to confirm
             
         Returns:
-            List of confirmed symbols
+            List of (symbol, gain_pct) tuples for confirmed symbols
         """
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
             results = executor.map(self._confirm_candidate, symbols)
         
-        return list(filter(None, results))
+        return [r for r in results if r is not None]
     
-    def _confirm_candidate(self, symbol: str) -> Optional[str]:
+    def _confirm_candidate(self, symbol: str) -> Optional[tuple]:
         """
         Fetch history and confirm gain % and relative volume.
         
@@ -148,7 +150,7 @@ class FinvizNewsScanner(BaseScanner):
             symbol: Ticker symbol
             
         Returns:
-            Symbol if confirmed, None otherwise
+            (symbol, gain_pct) tuple if confirmed, None otherwise
         """
         try:
             # Fetch 2 days of 1-minute data with extended hours and previous close
@@ -208,7 +210,7 @@ class FinvizNewsScanner(BaseScanner):
                 return None
             
             logger.info(f"  {symbol}: CONFIRMED (prev ${prev_close:.2f} -> ${current_price:.2f}, gain={gain_pct*100:.1f}%, relVol={rel_vol:.1f}x)")
-            return symbol
+            return (symbol, gain_pct)
             
         except Exception as e:
             logger.info(f"  {symbol}: Error - {e}")
