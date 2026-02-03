@@ -6,7 +6,7 @@ real-time prices when strategies are in PULLBACK or IN_POSITION state.
 """
 
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -40,6 +40,9 @@ class LiveTradingEngine:
     MAX_RETRIES = 3
     RETRY_DELAYS = [1, 2]  # seconds between retries
     
+    # Scanning timeout (minutes) - remove symbol if stuck in SCANNING state
+    SCANNING_TIMEOUT_MINUTES = 15
+    
     # Eastern timezone for market hours
     ET = ZoneInfo("America/New_York")
     
@@ -52,7 +55,7 @@ class LiveTradingEngine:
         extended_hours: bool = False,
         position_amount: Optional[float] = None,
         max_symbols: int = 10,
-        remove_after_exit: bool = False
+        remove_symbol: bool = False
     ):
         """
         Initialize LiveTradingEngine.
@@ -65,7 +68,7 @@ class LiveTradingEngine:
             extended_hours: Enable premarket/afterhours data
             position_amount: Fixed position size in dollars (if None, uses 25% of buying power)
             max_symbols: Maximum number of symbols to track
-            remove_after_exit: If True, remove symbol after any exit (pattern fail or position close)
+            remove_symbol: If True, remove symbol after pattern fail, position close, or scanning timeout
         """
         self.client_wrapper = client_wrapper
         self.broker = broker
@@ -74,7 +77,7 @@ class LiveTradingEngine:
         self.extended_hours = extended_hours
         self.position_amount = position_amount
         self.max_symbols = max_symbols
-        self.remove_after_exit = remove_after_exit
+        self.remove_symbol = remove_symbol
         
         self.strategies: Dict[str, BullFlagLiveStrategy] = {}
         self.running = False
@@ -82,6 +85,9 @@ class LiveTradingEngine:
         
         # Candle data storage for each symbol (for pattern failure detection)
         self.candle_data: Dict[str, List[Candle]] = {}
+        
+        # Track when each symbol was added (for scanning timeout)
+        self.symbol_added_time: Dict[str, datetime] = {}
         
         # Initialize strategy for each symbol
         for symbol in self.symbols:
@@ -344,9 +350,10 @@ class LiveTradingEngine:
                     self.candle_data[symbol].append(candle)
         
         # Check for exits after processing all candles
-        if self.remove_after_exit:
+        if self.remove_symbol:
             self._check_pattern_failed()
             self._check_position_exited()
+            self._check_scanning_timeout()
     
     def _check_pattern_failed(self) -> None:
         """
@@ -400,8 +407,34 @@ class LiveTradingEngine:
             del self.candle_data[symbol]
         if symbol in self._last_processed_slot:
             del self._last_processed_slot[symbol]
+        if symbol in self.symbol_added_time:
+            del self.symbol_added_time[symbol]
         if symbol in self.symbols:
             self.symbols.remove(symbol)
+    
+    def _check_scanning_timeout(self) -> None:
+        """
+        Remove symbols that have been in SCANNING state too long.
+        
+        If a symbol hasn't entered PULLBACK or IN_POSITION within the timeout,
+        it's not showing the pattern we want - remove it to make room for others.
+        """
+        now = datetime.now(self.ET)
+        timeout = timedelta(minutes=self.SCANNING_TIMEOUT_MINUTES)
+        to_remove = []
+        
+        for symbol, strategy in self.strategies.items():
+            # Only timeout symbols in SCANNING state
+            if strategy.state != StrategyState.SCANNING:
+                continue
+            
+            added_time = self.symbol_added_time.get(symbol)
+            if added_time and (now - added_time) >= timeout:
+                to_remove.append(symbol)
+        
+        for symbol in to_remove:
+            logger.info(f"{symbol}: SCANNING timeout ({self.SCANNING_TIMEOUT_MINUTES} min), removing from tracking")
+            self._remove_symbol(symbol)
     
     def add_symbol(self, symbol: str, replay_minutes: int = 10) -> bool:
         """
@@ -444,6 +477,7 @@ class LiveTradingEngine:
         # Add to tracking
         self.strategies[symbol] = strategy
         self.candle_data[symbol] = list(candles)
+        self.symbol_added_time[symbol] = datetime.now(self.ET)  # Track when added for timeout
         if symbol not in self.symbols:
             self.symbols.append(symbol)
         
@@ -468,7 +502,6 @@ class LiveTradingEngine:
         now_et = datetime.now(self.ET)
         
         # Calculate start time (minutes ago)
-        from datetime import timedelta
         start_time = now_et - timedelta(minutes=minutes + self.candle_interval)
         
         try:
@@ -549,7 +582,7 @@ class LiveTradingEngine:
                 strategy.check_stop_loss(price)
         
         # Remove symbols where position was exited via real-time stop loss
-        if self.remove_after_exit:
+        if self.remove_symbol:
             self._check_position_exited()
     
     def start(self):
