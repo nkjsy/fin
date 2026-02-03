@@ -16,6 +16,11 @@ from providers.interfaces import IDataProvider
 from utils import calculate_start_date
 from logger import get_logger
 
+# Import for type hint only to avoid circular import
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from client import AutoRefreshSchwabClient
+
 
 logger = get_logger("PROVIDER")
 
@@ -27,18 +32,23 @@ class SchwabProvider(IDataProvider):
     Implements synchronous methods for compatibility with existing scanner architecture.
     For streaming data, use the StreamClient directly in live_engine.py.
     
-    IMPORTANT: Always use AutoRefreshSchwabClient to create the client to ensure
-    automatic token refresh. Do not create clients directly with easy_client().
+    IMPORTANT: Pass the AutoRefreshSchwabClient wrapper (not .client) to ensure
+    automatic token refresh on each API call.
     """
     
-    def __init__(self, client: Client):
+    def __init__(self, client_wrapper: "AutoRefreshSchwabClient"):
         """
         Initialize SchwabProvider.
         
         Args:
-            client: A schwab Client obtained from AutoRefreshSchwabClient.client property.
+            client_wrapper: AutoRefreshSchwabClient wrapper for automatic token refresh.
         """
-        self.client = client
+        self._client_wrapper = client_wrapper
+    
+    @property
+    def client(self) -> Client:
+        """Get the current client, triggering refresh if needed."""
+        return self._client_wrapper.client
     
     def get_history(
         self,

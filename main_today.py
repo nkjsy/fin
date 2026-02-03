@@ -108,7 +108,7 @@ def main():
         sys.exit(1)
     
     # Create provider (uses current client)
-    provider = SchwabProvider(client_wrapper.client)
+    provider = SchwabProvider(client_wrapper)
     
     # Create broker
     if args.live:

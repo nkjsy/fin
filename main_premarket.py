@@ -81,7 +81,7 @@ def main():
     else:
         broker = PaperBroker()
     
-    provider = SchwabProvider(client_wrapper.client)
+    provider = SchwabProvider(client_wrapper)
     scanner = FinvizNewsScanner(provider)
     
     # Create engine with 1-min candles and extended hours

@@ -30,7 +30,7 @@ ET = ZoneInfo("America/New_York")
 def get_provider():
     """Get a SchwabProvider for testing."""
     client_wrapper = AutoRefreshSchwabClient()
-    return SchwabProvider(client_wrapper.client)
+    return SchwabProvider(client_wrapper)
 
 
 def test_finviz_scrape():

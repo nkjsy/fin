@@ -28,8 +28,8 @@ logger = get_logger("TEST")
 
 
 def get_client():
-    """Get a Schwab client for testing."""
-    return AutoRefreshSchwabClient().client
+    """Get a Schwab client wrapper for testing."""
+    return AutoRefreshSchwabClient()
 
 
 def test_schwab_fundamentals():
@@ -42,7 +42,7 @@ def test_schwab_fundamentals():
     logger.info("=" * 60)
     
     # Create client
-    client = get_client()
+    client = get_client().client
     
     # Test symbols
     test_symbols = ["AAPL", "MSFT", "TSLA"]
@@ -97,7 +97,7 @@ def test_schwab_movers():
     logger.info("Testing Schwab Movers API")
     logger.info("=" * 60)
     
-    client = get_client()
+    client = get_client().client
     
     indices = ["NASDAQ", "NYSE", "$DJI", "$COMPX", "$SPX"]
     
@@ -146,8 +146,8 @@ def test_live_scanner():
     logger.info("Testing Live Momentum Scanner")
     logger.info("=" * 60)
     
-    client = get_client()
-    provider = SchwabProvider(client)
+    client_wrapper = get_client()
+    provider = SchwabProvider(client_wrapper)
     scanner = LiveMomentumScanner(provider)
     
     # Mock only datetime.now in utils module, preserving other datetime functionality
@@ -173,7 +173,7 @@ def test_schwab_quotes():
     logger.info("Testing Schwab Quotes API")
     logger.info("=" * 60)
     
-    client = get_client()
+    client = get_client().client
     
     test_symbols = ["AAPL", "MSFT", "TSLA", "NVDA"]
     
@@ -203,7 +203,7 @@ def test_schwab_history():
     logger.info("Testing Schwab Price History API")
     logger.info("=" * 60)
     
-    client = get_client()
+    client = get_client().client
     
     symbol = "AAPL"
     logger.info(f"Fetching 5-minute candles for {symbol}...")
@@ -241,8 +241,8 @@ def test_volume_confirmation():
     logger.info("Testing Volume Confirmation")
     logger.info("=" * 60)
     
-    client = get_client()
-    provider = SchwabProvider(client)
+    client_wrapper = get_client()
+    provider = SchwabProvider(client_wrapper)
     scanner = LiveMomentumScanner(provider)
     
     # Test with known liquid symbols
@@ -263,8 +263,8 @@ def test_volume_debug():
     logger.info("Debugging Volume Data")
     logger.info("=" * 60)
     
-    client = get_client()
-    provider = SchwabProvider(client)
+    client_wrapper = get_client()
+    provider = SchwabProvider(client_wrapper)
     
     symbol = "AAPL"
     logger.info(f"Fetching 5-minute candles for {symbol}...")
