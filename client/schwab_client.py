@@ -6,6 +6,7 @@ before the 30-minute expiration to ensure uninterrupted operation.
 """
 
 import time
+import threading
 from schwab.client import Client
 from schwab.auth import easy_client
 
@@ -42,6 +43,7 @@ class AutoRefreshSchwabClient:
         """Initialize with a fresh client."""
         self._client = None
         self._client_created_at = None
+        self._refresh_lock = threading.Lock()
         self._create_client()
     
     @property
@@ -69,15 +71,24 @@ class AutoRefreshSchwabClient:
         
         Call this periodically (e.g., every polling cycle) to proactively
         refresh the client before the 30-minute access token expires.
+        
+        Uses a lock to prevent concurrent refresh attempts.
         """
         if self._client is None or self._client_created_at is None:
-            self._create_client()
+            with self._refresh_lock:
+                # Double-check after acquiring lock
+                if self._client is None or self._client_created_at is None:
+                    self._create_client()
             return
         
         elapsed = time.time() - self._client_created_at
         if elapsed >= self.ACCESS_TOKEN_REFRESH_SECONDS:
-            logger.info(f"Access token age: {elapsed/60:.1f}min, refreshing...")
-            self._create_client()
+            with self._refresh_lock:
+                # Double-check after acquiring lock (another thread may have refreshed)
+                elapsed = time.time() - self._client_created_at
+                if elapsed >= self.ACCESS_TOKEN_REFRESH_SECONDS:
+                    logger.info(f"Access token age: {elapsed/60:.1f}min, refreshing...")
+                    self._create_client()
     
     def force_refresh(self):
         """Force an immediate client refresh."""

@@ -7,7 +7,7 @@ real-time prices when strategies are in PULLBACK or IN_POSITION state.
 
 import time
 from datetime import datetime, time as dt_time, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
 
 from schwab.client import Client
@@ -88,6 +88,9 @@ class LiveTradingEngine:
         
         # Track when each symbol was added (for scanning timeout)
         self.symbol_added_time: Dict[str, datetime] = {}
+        
+        # Track symbols that have already been traded (to prevent re-entry)
+        self.traded_symbols: Set[str] = set()
         
         # Initialize strategy for each symbol
         for symbol in self.symbols:
@@ -379,8 +382,9 @@ class LiveTradingEngine:
         """
         Remove symbols where position was exited (IN_POSITION -> SCANNING).
         
-        After a sell (stop loss or take profit), remove the symbol from tracking
-        to avoid re-entering the same stock in the same session.
+        After a sell (stop loss or take profit), the symbol is:
+        1. Added to traded_symbols to prevent re-entry this session
+        2. Removed from active tracking
         """
         to_remove = []
         for symbol, strategy in self.strategies.items():
@@ -392,6 +396,7 @@ class LiveTradingEngine:
         
         for symbol in to_remove:
             logger.info(f"Position exited for {symbol}, removing from tracking")
+            self.traded_symbols.add(symbol)  # Prevent re-adding this symbol
             self._remove_symbol(symbol)
     
     def _remove_symbol(self, symbol: str) -> None:
@@ -440,15 +445,22 @@ class LiveTradingEngine:
         """
         Add a symbol to track. Replays last N minutes of candles to catch up.
         
+        Signals are disabled during replay to prevent trading on historical data.
+        After replay, the signal handler is attached for live trading only.
+        
         Args:
             symbol: Stock symbol to add
             replay_minutes: Minutes of historical candles to replay
             
         Returns:
-            True if symbol was added, False if already tracking or at capacity
+            True if symbol was added, False if already tracking, already traded, or at capacity
         """
         if symbol in self.strategies:
             logger.info(f"Already tracking {symbol}")
+            return False
+        
+        if symbol in self.traded_symbols:
+            logger.info(f"{symbol} already traded this session, skipping")
             return False
         
         if len(self.strategies) >= self.max_symbols:
@@ -460,10 +472,10 @@ class LiveTradingEngine:
         # Fetch historical candles for replay
         candles = self._fetch_history_for_replay(symbol, replay_minutes)
         
-        # Create strategy and replay candles
+        # Create strategy WITHOUT signal handler during replay (to prevent trading on historical data)
         strategy = BullFlagLiveStrategy(
             symbol=symbol,
-            on_signal=self._handle_signal
+            on_signal=None  # No signals during replay
         )
         
         for candle in candles:
@@ -473,6 +485,9 @@ class LiveTradingEngine:
                 f"L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}"
             )
             strategy.process_candle(candle)
+        
+        # Now attach the signal handler for live trading
+        strategy.on_signal = self._handle_signal
         
         # Add to tracking
         self.strategies[symbol] = strategy
