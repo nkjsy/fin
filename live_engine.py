@@ -517,7 +517,7 @@ class LiveTradingEngine:
         now_et = datetime.now(self.ET)
         
         # Calculate start time (minutes ago)
-        start_time = now_et - timedelta(minutes=minutes + self.candle_interval)
+        start_time = now_et - timedelta(minutes=minutes)
         
         try:
             if self.candle_interval == 1:
@@ -546,13 +546,14 @@ class LiveTradingEngine:
             
             result = []
             current_slot = self._datetime_to_slot(now_et)
+            start_slot = self._datetime_to_slot(start_time)
             
             for c in candles:
                 candle_time = datetime.fromtimestamp(c["datetime"] / 1000, tz=self.ET)
                 candle_slot = self._datetime_to_slot(candle_time)
                 
-                # Only include complete candles (not the current incomplete one)
-                if candle_slot < current_slot:
+                # Only include candles within the requested window and complete
+                if start_slot <= candle_slot < current_slot:
                     result.append(Candle(
                         timestamp=candle_time,
                         open=float(c["open"]),

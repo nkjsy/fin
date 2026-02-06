@@ -51,7 +51,7 @@ SCAN_INTERVAL = 60  # seconds
 # Position limits
 MAX_SYMBOLS = 3
 POSITION_AMOUNT = 10000  # $10k per position
-REPLAY_MINUTES = 10  # minutes of history to replay when adding symbol
+REPLAY_MINUTES = 3  # minutes of history to replay when adding symbol
 
 
 def main():
