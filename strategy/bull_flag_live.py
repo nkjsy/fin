@@ -6,55 +6,11 @@ price checks during pullback and in-position states.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Callable, Optional, List
-from enum import Enum
-from zoneinfo import ZoneInfo
 import pandas as pd
 import pandas_ta as ta
 
-from logger import get_logger
-
-
-# Eastern timezone for market hours
-ET = ZoneInfo("America/New_York")
-
-
-class StrategyState(Enum):
-    """Strategy state machine states."""
-    SCANNING = "SCANNING"
-    PULLBACK = "PULLBACK"
-    IN_POSITION = "IN_POSITION"
-
-
-@dataclass
-class Candle:
-    """Represents a single OHLCV candle."""
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-    
-    @property
-    def is_green(self) -> bool:
-        return self.close > self.open
-    
-    @property
-    def is_red(self) -> bool:
-        return self.close < self.open
-
-
-@dataclass
-class Signal:
-    """Represents a trading signal."""
-    timestamp: datetime
-    symbol: str
-    action: str  # "BUY" or "SELL"
-    price: float
-    stop_loss: Optional[float] = None
-    reason: str = ""
+from strategy.base import ILiveStrategy, StrategyState, Candle, Signal
 
 
 @dataclass 
@@ -93,7 +49,7 @@ class GreenSequence:
                 f"high={self.high}, low={self.low}, avg_volume={self.avg_volume})")
 
 
-class BullFlagLiveStrategy:
+class BullFlagLiveStrategy(ILiveStrategy):
     """
     Bull flag strategy for live trading.
     
@@ -152,19 +108,6 @@ class BullFlagLiveStrategy:
         
         # Previous candle
         self.prev_candle: Optional[Candle] = None
-        
-        # Per-symbol logger
-        self._logger = get_logger(self.symbol)
-    
-    def _set_state(self, new_state: StrategyState):
-        """Set state and track previous state for pattern failure detection."""
-        self.prev_state = self.state
-        self.state = new_state
-        self._log(f"State: {self.prev_state.value} -> {new_state.value}")
-    
-    def _log(self, message: str):
-        """Log with symbol prefix."""
-        self._logger.info(message)
     
     def _calculate_ema(self) -> Optional[float]:
         """Calculate current EMA from candle history."""
@@ -177,24 +120,6 @@ class BullFlagLiveStrategy:
         
         ema = ta.ema(pd.Series(closes), length=self.ema_period)
         return ema.iloc[-1] if ema is not None and len(ema) > 0 else None
-    
-    def _emit_signal(self, action: str, price: float, stop_loss: float = None, reason: str = "") -> Signal:
-        """Emit a trading signal."""
-        signal = Signal(
-            timestamp=datetime.now(ET),
-            symbol=self.symbol,
-            action=action,
-            price=price,
-            stop_loss=stop_loss,
-            reason=reason
-        )
-        
-        self._log(f"SIGNAL: {action} @ ${price:.2f} | {reason}")
-        
-        if self.on_signal:
-            self.on_signal(signal)
-        
-        return signal
     
     def check_breakout(self, current_price: float) -> Optional[Signal]:
         """

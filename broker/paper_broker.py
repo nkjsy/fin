@@ -285,20 +285,30 @@ class PaperBroker(IBroker):
                 reason_label = f" ({reason})" if reason else ""
                 logger.info(f"  [{timestamp}] {side} {qty} {symbol} @ ${price:.2f}{reason_label}")
             
-            # Calculate P&L for completed round trips
-            for i, sell in enumerate(sell_trades):
-                if i < len(buy_trades):
-                    buy = buy_trades[i]
-                    pnl = (sell["price"] - buy["price"]) * sell["quantity"]
+            # Calculate P&L for completed round trips (FIFO matching)
+            buy_idx = 0
+            buy_remaining = buy_trades[0]["quantity"] if buy_trades else 0
+            for sell in sell_trades:
+                sell_remaining = sell["quantity"]
+                while sell_remaining > 0 and buy_idx < len(buy_trades):
+                    match_qty = min(sell_remaining, buy_remaining)
+                    pnl = (sell["price"] - buy_trades[buy_idx]["price"]) * match_qty
                     total_pnl += pnl
-                    
+
                     if pnl >= 0:
                         wins += 1
                     else:
                         losses += 1
-                    
+
                     pnl_label = "profit" if pnl >= 0 else "loss"
-                    logger.info(f"    -> Round trip P&L: ${pnl:+,.2f} ({pnl_label})")
+                    logger.info(f"    -> Round trip P&L: ${pnl:+,.2f} ({pnl_label}, {match_qty} shares)")
+
+                    sell_remaining -= match_qty
+                    buy_remaining -= match_qty
+                    if buy_remaining <= 0:
+                        buy_idx += 1
+                        if buy_idx < len(buy_trades):
+                            buy_remaining = buy_trades[buy_idx]["quantity"]
         
         if not self.trade_log:
             logger.info("  No trades executed")

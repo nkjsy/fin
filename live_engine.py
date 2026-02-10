@@ -13,7 +13,8 @@ from zoneinfo import ZoneInfo
 from schwab.client import Client
 
 from broker.interfaces import IBroker, OrderSide, OrderType
-from strategy.bull_flag_live import BullFlagLiveStrategy, Candle, Signal, StrategyState
+from strategy.base import ILiveStrategy, Candle, Signal, StrategyState
+from strategy.bull_flag_live import BullFlagLiveStrategy
 from client import AutoRefreshSchwabClient
 from logger import get_logger
 import httpx
@@ -55,7 +56,8 @@ class LiveTradingEngine:
         extended_hours: bool = False,
         position_amount: Optional[float] = None,
         max_symbols: int = 10,
-        remove_symbol: bool = False
+        remove_symbol: bool = False,
+        strategy_factory=None
     ):
         """
         Initialize LiveTradingEngine.
@@ -69,6 +71,8 @@ class LiveTradingEngine:
             position_amount: Fixed position size in dollars (if None, uses 25% of buying power)
             max_symbols: Maximum number of symbols to track
             remove_symbol: If True, remove symbol after pattern fail, position close, or scanning timeout
+            strategy_factory: Callable(symbol, on_signal) -> ILiveStrategy.
+                              Defaults to BullFlagLiveStrategy for backward compatibility.
         """
         self.client_wrapper = client_wrapper
         self.broker = broker
@@ -78,8 +82,11 @@ class LiveTradingEngine:
         self.position_amount = position_amount
         self.max_symbols = max_symbols
         self.remove_symbol = remove_symbol
+        self.strategy_factory = strategy_factory or (
+            lambda sym, on_sig: BullFlagLiveStrategy(symbol=sym, on_signal=on_sig)
+        )
         
-        self.strategies: Dict[str, BullFlagLiveStrategy] = {}
+        self.strategies: Dict[str, ILiveStrategy] = {}
         self.running = False
         self._last_processed_slot: Dict[str, int] = {}  # slot = minutes since market open / interval
         
@@ -94,10 +101,7 @@ class LiveTradingEngine:
         
         # Initialize strategy for each symbol
         for symbol in self.symbols:
-            self.strategies[symbol] = BullFlagLiveStrategy(
-                symbol=symbol,
-                on_signal=self._handle_signal
-            )
+            self.strategies[symbol] = self.strategy_factory(symbol, self._handle_signal)
             self.candle_data[symbol] = []
         
         logger.info(
@@ -152,15 +156,19 @@ class LiveTradingEngine:
                     logger.info(f"No position to sell for {signal.symbol}")
                     return
                 
+                # Support partial sells via quantity_pct
+                sell_qty = int(position.quantity * getattr(signal, 'quantity_pct', 1.0))
+                sell_qty = max(1, min(sell_qty, position.quantity))  # clamp
+                
                 order_id = self.broker.place_order(
                     symbol=signal.symbol,
                     side=OrderSide.SELL,
-                    quantity=position.quantity,
+                    quantity=sell_qty,
                     order_type=OrderType.LIMIT,
                     limit_price=signal.price,
                     reason=signal.reason
                 )
-                logger.info(f"SELL order placed: {order_id} for {position.quantity} shares")
+                logger.info(f"SELL order placed: {order_id} for {sell_qty} shares")
                 
         except Exception as e:
             logger.info(f"Error executing signal: {e}")
@@ -473,10 +481,7 @@ class LiveTradingEngine:
         candles = self._fetch_history_for_replay(symbol, replay_minutes)
         
         # Create strategy WITHOUT signal handler during replay (to prevent trading on historical data)
-        strategy = BullFlagLiveStrategy(
-            symbol=symbol,
-            on_signal=None  # No signals during replay
-        )
+        strategy = self.strategy_factory(symbol, None)  # No signals during replay
         
         for candle in candles:
             candle_time_str = candle.timestamp.strftime("%H:%M")
