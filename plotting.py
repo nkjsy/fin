@@ -6,9 +6,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# State colors for chart visualization (3 states only)
+# State colors for chart visualization
 STATE_COLORS = {
     'SCANNING': 'gray',
+    'BUILDING_RANGE': 'cyan',
     'PULLBACK': 'orange',
     'IN_POSITION': 'blue',
 }
@@ -100,16 +101,33 @@ def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_pre
                 name="Buy"
             ), secondary_y=False)
 
-        # Sell Markers
+        # Sell Markers — separate full sells vs partial sells
         sells = trades_plot[trades_plot["Action"] == "SELL"]
         if not sells.empty:
-            fig.add_trace(go.Scatter(
-                x=sells["Datetime"], 
-                y=sells["Price"], 
-                mode="markers", 
-                marker=dict(symbol="triangle-down", size=14, color="red", line=dict(width=1, color="darkred")), 
-                name="Sell"
-            ), secondary_y=False)
+            has_qty = "Qty" in sells.columns
+            partial = sells[sells["Qty"] < 1.0] if has_qty else sells.iloc[0:0]
+            full = sells[sells["Qty"] >= 1.0] if has_qty else sells
+
+            if not full.empty:
+                fig.add_trace(go.Scatter(
+                    x=full["Datetime"], 
+                    y=full["Price"], 
+                    mode="markers", 
+                    marker=dict(symbol="triangle-down", size=14, color="red", line=dict(width=1, color="darkred")), 
+                    name="Sell"
+                ), secondary_y=False)
+
+            if not partial.empty:
+                labels = [f"Partial ({int(q*100)}%)" for q in partial["Qty"]]
+                fig.add_trace(go.Scatter(
+                    x=partial["Datetime"], 
+                    y=partial["Price"], 
+                    mode="markers", 
+                    marker=dict(symbol="triangle-down", size=10, color="orange", line=dict(width=1, color="darkorange")),
+                    text=labels,
+                    hovertemplate="%{text}<br>$%{y:.2f}<extra></extra>",
+                    name="Partial Sell"
+                ), secondary_y=False)
 
     # Volume Colors: Green if Close >= Open, Red if Close < Open
     colors = ['green' if row['Close'] >= row['Open'] else 'red' for _, row in df_plot.iterrows()]
@@ -185,7 +203,8 @@ def parse_log_file(log_path: str) -> dict:
         'trading_date': None,
         'tickers': [],
         'candles': {},  # ticker -> [(datetime, O, H, L, C, V), ...]
-        'trades': {}  # ticker -> [(datetime, action, price), ...]
+        'trades': {},  # ticker -> [(datetime, action, price, qty_pct), ...]
+        'strategies': {},  # ticker -> strategy name (auto-detected)
     }
     
     # Extract date from log filename (e.g., 2026-01-22_09-31-34.log)
@@ -198,12 +217,17 @@ def parse_log_file(log_path: str) -> dict:
         lines = f.readlines()
     
     for line in lines:
-        # Extract tickers from "Confirmed X tickers" line
-        # [09:40:22] [SCANNER] Confirmed 7 tickers: ['SXTP', 'CMCT', ...]
-        ticker_match = re.search(r"Confirmed \d+ tickers: \[([^\]]+)\]", line)
+        # Extract tickers from scanner confirmed lines
+        # LiveMomentumScanner: [09:40:22] [SCANNER] Confirmed 7 tickers: ['SXTP', 'CMCT', ...]
+        # FinvizNewsScanner:   [07:05:12] [SCANNER] Confirmed 3, returning top 3: ['AAPL', 'MSFT', ...]
+        ticker_match = re.search(r"Confirmed \d+.*?: \[([^\]]+)\]", line)
         if ticker_match:
             tickers_str = ticker_match.group(1)
-            result['tickers'] = [t.strip().strip("'\"") for t in tickers_str.split(',')]
+            new_tickers = [t.strip().strip("'\"" ) for t in tickers_str.split(',')]
+            # Accumulate tickers across multiple scan rounds
+            for t in new_tickers:
+                if t not in result['tickers']:
+                    result['tickers'].append(t)
         
         # Extract candle data from ENGINE logs
         # Format: [09:40:42] [ENGINE] [09:30] MOVE: O=20.14 H=23.50 L=20.14 C=21.73 V=2056439
@@ -228,38 +252,51 @@ def parse_log_file(log_path: str) -> dict:
                 dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
                 result['candles'][ticker].append((dt, o, h, l, c, v))
         
-        # Extract BUY signals
-        # [11:20:21] [ROLR] SIGNAL: BUY @ $11.50 | Bull flag breakout | Stop: $11.04
-        buy_match = re.search(r"\[(\d{2}:\d{2}:\d{2})\] \[(\w+)\] SIGNAL: BUY @ \$([0-9.]+)", line)
-        if buy_match:
-            time_str = buy_match.group(1)
-            ticker = buy_match.group(2)
-            price = float(buy_match.group(3))
-            
+        # Extract BUY/SELL signals
+        # Bull flag: [11:20:21] [ROLR] SIGNAL: BUY @ $11.50 (qty=100%) | Bull flag breakout
+        # ORB:       [09:40:05] [AAPL] [ORB] SIGNAL: SELL @ $25.51 (qty=50%) | Partial take profit
+        # Force-close: [15:55:01] [COMBINED] Force-closed AAPL: 50 shares @ $25.51
+        signal_match = re.search(
+            r"\[(\d{2}:\d{2}:\d{2})\] \[(\w+)\]\s*(?:\[ORB\])?\s*SIGNAL: (BUY|SELL) @ \$([0-9.]+)(?:\s*\(qty=(\d+)%\))?",
+            line
+        )
+        if signal_match:
+            time_str = signal_match.group(1)
+            ticker = signal_match.group(2)
+            action = signal_match.group(3)
+            price = float(signal_match.group(4))
+            qty_pct = int(signal_match.group(5)) / 100.0 if signal_match.group(5) else 1.0
+
             if ticker not in result['trades']:
                 result['trades'][ticker] = []
-            
-            # Combine date and time
+
+            # Detect strategy from [ORB] prefix
+            if '[ORB]' in line and ticker not in result['strategies']:
+                result['strategies'][ticker] = 'ORB'
+            elif ticker not in result['strategies']:
+                result['strategies'][ticker] = 'BullFlagLive'
+
             if result['trading_date']:
                 dt_str = f"{result['trading_date']} {time_str}"
                 dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                result['trades'][ticker].append((dt, 'BUY', price))
-        
-        # Extract SELL signals
-        # [12:09:33] [GLSI] SIGNAL: SELL @ $25.51 | Stop loss hit
-        sell_match = re.search(r"\[(\d{2}:\d{2}:\d{2})\] \[(\w+)\] SIGNAL: SELL @ \$([0-9.]+)", line)
-        if sell_match:
-            time_str = sell_match.group(1)
-            ticker = sell_match.group(2)
-            price = float(sell_match.group(3))
-            
+                result['trades'][ticker].append((dt, action, price, qty_pct))
+
+        # Force-close: [15:55:01] [COMBINED] Force-closed AAPL: 50 shares @ $25.51
+        force_match = re.search(
+            r"\[(\d{2}:\d{2}:\d{2})\].*Force-closed (\w+):.*@ \$([0-9.]+)", line
+        )
+        if force_match:
+            time_str = force_match.group(1)
+            ticker = force_match.group(2)
+            price = float(force_match.group(3))
+
             if ticker not in result['trades']:
                 result['trades'][ticker] = []
-            
+
             if result['trading_date']:
                 dt_str = f"{result['trading_date']} {time_str}"
                 dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                result['trades'][ticker].append((dt, 'SELL', price))
+                result['trades'][ticker].append((dt, 'SELL', price, 1.0))
     
     return result
 
@@ -282,15 +319,18 @@ def plot_from_log(log_path: str, tickers: list = None, timeframe: str = "minute5
     
     trading_date = log_data['trading_date']
     
-    # Determine which tickers to plot
-    tickers_to_plot = tickers if tickers else log_data['tickers']
+    # Determine which tickers to plot — only those with actual candle data
+    if tickers:
+        tickers_to_plot = [t for t in tickers if t in log_data['candles']]
+    else:
+        tickers_to_plot = list(log_data['candles'].keys())
     
     if not tickers_to_plot:
-        print("No tickers found in log file")
+        print("No tickers with candle data found in log file")
         return
     
     print(f"Plotting {len(tickers_to_plot)} tickers for {trading_date}")
-    
+
     # Plot each ticker using candle data from logs
     for ticker in tickers_to_plot:
         candles = log_data['candles'].get(ticker, [])
@@ -304,12 +344,15 @@ def plot_from_log(log_path: str, tickers: list = None, timeframe: str = "minute5
         # Create DataFrame from candle data
         df = pd.DataFrame(candles, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
         
-        # Create trades DataFrame for this ticker
+        # Create trades DataFrame for this ticker (now includes Qty column)
         trades_list = log_data['trades'].get(ticker, [])
         if trades_list:
-            trades = pd.DataFrame(trades_list, columns=['Datetime', 'Action', 'Price'])
+            trades = pd.DataFrame(trades_list, columns=['Datetime', 'Action', 'Price', 'Qty'])
         else:
-            trades = pd.DataFrame(columns=['Datetime', 'Action', 'Price'])
+            trades = pd.DataFrame(columns=['Datetime', 'Action', 'Price', 'Qty'])
+        
+        # Auto-detect strategy name
+        strategy_name = log_data['strategies'].get(ticker, 'Live')
         
         # Plot using existing function
         plot_performance(
@@ -317,7 +360,7 @@ def plot_from_log(log_path: str, tickers: list = None, timeframe: str = "minute5
             df_res=df,
             trades=trades,
             timeframe=timeframe,
-            strategy_name="BullFlagLive",
+            strategy_name=strategy_name,
             title_prefix="LOG:",
             trading_date=trading_date,
             show_states=False

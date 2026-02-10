@@ -34,7 +34,8 @@ from broker import PaperBroker, SchwabBroker
 from providers.schwab_lib import SchwabProvider
 from scanner.finviz_news import FinvizNewsScanner
 from live_engine import LiveTradingEngine
-from logger import get_logger, enable_file_logging
+from logger import get_logger, enable_file_logging, get_log_file_path
+from plotting import plot_from_log
 from utils import speak_symbols
 
 
@@ -184,6 +185,12 @@ def main():
     except Exception as e:
         logger.info(f"Error: {e}")
         raise
+
+    # Visualize log file
+    log_path = get_log_file_path()
+    if log_path:
+        logger.info(f"Generating charts from log: {log_path}")
+        plot_from_log(log_path)
 
 
 if __name__ == "__main__":
