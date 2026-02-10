@@ -346,3 +346,132 @@ Scan blocks at most 2 quote poll cycles (~6 sec max slippage). Acceptable for 60
 | `LiveTradingEngine` | `live_engine.py` | Candle/quote polling (generalized) |
 | `IBroker` | `broker/interfaces.py` | Order placement |
 | `AutoRefreshSchwabClient` | `client/` | Schwab API auth |
+## Milestone 5: Combined Bull Flag + Opening Range Breakout (ORB)
+
+Run two strategies sequentially in one session: bull flag during premarket (7:00–9:30), then ORB on all confirmed stocks after market open (9:30–close).
+
+### Strategy Rules — ORB
+
+| Rule | Value |
+|------|-------|
+| Candidates | All stocks confirmed by Finviz scanner during premarket Phase 1 |
+| Range window | First 5 minutes after open (9:30–9:35), configurable |
+| Range filter | Skip if range width > 4% of price (risk too large) |
+| Entry | Price breaks above range high |
+| Stop loss | Range low |
+| Take profit (Phase 1) | 1:1 R:R target → sell 50% position |
+| Take profit (Phase 2) | Trailing stop at range_width below highest price → sell remaining 50% |
+| Position size | $10,000 each |
+| No max symbol limit | ORB runs on all premarket-confirmed stocks |
+
+### Two-Phase Session
+
+| Phase | Time | Strategy | Scanner |
+|-------|------|----------|---------|
+| Phase 1 | 7:00–9:30 AM | Bull flag (existing) | Finviz every 60s |
+| Transition | 9:30 AM | Stop bull flag scanning, let open positions ride | — |
+| Phase 2 | 9:30 AM–4:00 PM | ORB on all confirmed stocks | None (candidates collected in Phase 1) |
+
+### Exit Logic — ORB IN_POSITION
+
+```
+if not partial_exit_done:
+    if price >= target_1r:
+        SELL 50% (quantity_pct=0.5)
+        partial_exit_done = True
+        activate trailing stop
+    if price <= stop_loss:
+        SELL 100% (quantity_pct=1.0)
+        go to SCANNING
+else:
+    update trailing_stop = highest_high - range_width
+    if price <= trailing_stop:
+        SELL 100% (quantity_pct=1.0)
+        go to SCANNING
+```
+
+### Implementation Steps
+
+#### 1. Update `strategy/base.py` — add shared types + ILiveStrategy ABC
+
+Move `StrategyState`, `Candle`, `Signal` from `strategy/bull_flag_live.py` into `base.py`. Add `BUILDING_RANGE` to `StrategyState`. Add `ILiveStrategy` ABC:
+
+- `process_candle(candle: Candle) -> Optional[Signal]`
+- `check_breakout(current_price: float) -> Optional[Signal]`
+- `check_stop_loss(current_price: float) -> Optional[Signal]`
+- `reset()`
+- Attributes: `state`, `prev_state`, `symbol`, `on_signal`
+
+Keep existing `BaseStrategy` unchanged.
+
+Add `quantity_pct: float = 1.0` field to `Signal` dataclass (1.0 = full position, 0.5 = half).
+
+#### 2. Update `strategy/bull_flag_live.py` — use shared types
+
+- Remove `StrategyState`, `Candle`, `Signal` class definitions
+- Import from `strategy.base`
+- Extend `ILiveStrategy`
+- Keep `GreenSequence` in place
+- No logic changes
+
+#### 3. Create `strategy/orb_live.py` — ORB strategy
+
+`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 5), `max_range_pct` (default 0.04), `on_signal`.
+
+State machine (all core logic in `process_candle()`, real-time checks in `check_breakout()`/`check_stop_loss()`):
+
+| State | Behavior |
+|-------|----------|
+| `BUILDING_RANGE` | Collect candles from 9:30 for `range_minutes` mins. Track `range_high`, `range_low`. Transition to `PULLBACK` when range complete. Skip if range width > `max_range_pct`. |
+| `PULLBACK` | Watch for breakout. `check_breakout(price)`: if `price >= range_high` → BUY signal, enter `IN_POSITION`. `process_candle()`: same check on candle high. |
+| `IN_POSITION` | Two sub-phases controlled by `self.partial_exit_done` flag. Before 1:1 target: `check_stop_loss(price)` at `range_low` (sell 100%), or sell 50% at 1:1 R:R target. After 1:1 target: trailing stop at `highest_high - range_width` (sell 100%). |
+| `SCANNING` | Done. Strategy finished for this symbol. |
+
+Candles before 9:30: stored in history for context, no state changes.
+
+#### 4. Update `live_engine.py` — strategy-agnostic
+
+- Import from `strategy.base` instead of `strategy.bull_flag_live`
+- Type hint: `self.strategies: Dict[str, ILiveStrategy]`
+- Add `strategy_factory` param to `__init__()`: callable `(symbol, on_signal) -> ILiveStrategy`, defaults to `BullFlagLiveStrategy`
+- Update `add_symbol()`: use `self.strategy_factory(symbol, None)` instead of hardcoded `BullFlagLiveStrategy`
+- Update `__init__` constructor loop: same factory usage
+- Update `_handle_signal()` SELL branch: use `int(position.quantity * signal.quantity_pct)` instead of `position.quantity`
+- Everything else unchanged
+
+#### 5. Create `main_combined.py` — two-phase orchestration
+
+Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 5`, `POSITION_AMOUNT = 10000`, `MAX_SYMBOLS = 3`, `REPLAY_MINUTES = 3`.
+
+- Maintain `all_confirmed: Set[str]` — every scanner-confirmed symbol during Phase 1
+- **Phase 1 (7:00–9:30):** Bull flag engine with Finviz scanner loop (same as `main_premarket.py`). All confirmed symbols added to `all_confirmed`.
+- **Transition at 9:30:** Remove non-IN_POSITION bull flag strategies. Create second `LiveTradingEngine` with ORB factory. Add all `all_confirmed` symbols (no replay, no max_symbols limit). ORB can trade stocks bull flag already traded.
+- **Phase 2 (9:30–close):** Combined loop running both engines. Bull flag engine manages remaining IN_POSITION symbols only. ORB engine processes candles for all candidates. Exit when both engines done or market close.
+
+#### 6. Update `strategy/__init__.py` — add exports
+
+Add `ILiveStrategy`, `ORBLiveStrategy`, `StrategyState`, `Candle`, `Signal`.
+
+### Verification
+
+- Paper-trade `python main_combined.py` and verify:
+  - Phase 1: bull flag works identically to `main_premarket.py`
+  - `all_confirmed` collects all scanner-confirmed symbols
+  - At 9:30: non-positioned bull flag symbols removed, positioned ones kept
+  - ORB builds range from first 5 minutes, skips stocks with range > 4%
+  - ORB enters on breakout above range high via real-time polling
+  - ORB sells 50% at 1:1 R:R, remaining 50% on trailing stop
+  - Both engines coexist if bull flag has open position at 9:30
+- Run `python main_premarket.py` to verify backward compatibility
+
+### Reused Components
+
+| Component | Source | Usage |
+|-----------|--------|-------|
+| `FinvizNewsScanner` | `scanner/finviz_news.py` | Premarket scanning (Phase 1) |
+| `BullFlagLiveStrategy` | `strategy/bull_flag_live.py` | Premarket pattern detection |
+| `LiveTradingEngine` | `live_engine.py` | Candle/quote polling (both phases) |
+| `IBroker` | `broker/interfaces.py` | Order placement |
+| `PaperBroker` | `broker/paper_broker.py` | Testing |
+| `SchwabBroker` | `broker/schwab_broker.py` | Live trading |
+| `AutoRefreshSchwabClient` | `client/` | Schwab API auth |
