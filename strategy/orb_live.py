@@ -1,10 +1,17 @@
 """
 Opening Range Breakout (ORB) Live Strategy
 
-Builds an opening range from the first N minutes after market open (9:30 AM),
-then enters on breakout above the range high. Exit via scaled approach:
+Builds the opening range from a fixed time window after market open (default
+9:30–9:45), then enters on breakout above the range high with volume
+confirmation.  Exit via scaled approach:
   Phase 1 — sell 50% at 1:1 R:R target
   Phase 2 — trailing stop at range_width below highest price for remaining 50%
+
+Simplified state machine (no BUILDING_RANGE state):
+  SCANNING  → range candles accumulated during fixed window; validated once
+  PULLBACK  → watching for breakout above range high (volume required)
+  IN_POSITION → managing exits (partial + trailing stop)
+  (done)    → trade completed or disqualified, strategy requests removal
 
 Uses the same ILiveStrategy interface as BullFlagLiveStrategy so it plugs
 directly into LiveTradingEngine.
@@ -25,52 +32,61 @@ class ORBLiveStrategy(ILiveStrategy):
     """
     Opening Range Breakout strategy for live trading.
 
-    Collects candles during the opening range window, then watches for a
-    breakout above the range high.  All core logic runs through
-    process_candle() and the real-time check_breakout()/check_stop_loss()
-    hooks used by the engine's fast-polling mode.
+    Collects candles during a fixed time window (9:30–9:30+range_minutes),
+    validates the range once when the first post-range candle arrives, then
+    watches for a breakout above range high with volume confirmation.
     """
 
     def __init__(
         self,
         symbol: str,
-        range_minutes: int = 5,
-        max_range_pct: float = 0.04,
+        range_minutes: int = 15,
+        max_range_pct: float = 0.10,
+        volume_multiplier: float = 1.5,
         on_signal: Optional[Callable[[Signal], None]] = None,
     ):
         """
         Args:
-            symbol:         Ticker symbol this instance tracks
-            range_minutes:  Minutes after 9:30 to build the opening range (5 or 15)
-            max_range_pct:  Max allowed range width as fraction of price (0.04 = 4%)
-            on_signal:      Callback fired on BUY / SELL signals
+            symbol:            Ticker symbol this instance tracks
+            range_minutes:     Minutes after 9:30 to build the opening range
+            max_range_pct:     Max allowed range width as fraction of price (0.08 = 8%)
+            volume_multiplier: Breakout candle volume must be >= avg_range_vol * this
+            on_signal:         Callback fired on BUY / SELL signals
         """
         self.symbol = symbol
         self.range_minutes = range_minutes
         self.max_range_pct = max_range_pct
+        self.volume_multiplier = volume_multiplier
         self.on_signal = on_signal
 
         # State tracking
         self.state = StrategyState.SCANNING
         self.prev_state = StrategyState.SCANNING
 
-        # Opening range
+        # Opening range — accumulated during fixed window
         self.range_high: float = 0.0
         self.range_low: float = float("inf")
-        self.range_candle_count: int = 0
-        self.range_end_time: Optional[dt_time] = None  # set when first range candle arrives
+        self.range_volumes: List[int] = []
+        self.avg_range_volume: float = 0.0
+        self.range_width: float = 0.0
+        self.range_validated: bool = False
+
+        # Fixed range end time (e.g. 9:45 for 15-min range)
+        end_minutes = MARKET_OPEN.hour * 60 + MARKET_OPEN.minute + self.range_minutes
+        self.range_end_time = dt_time(end_minutes // 60, end_minutes % 60)
 
         # Position state
         self.entry_price: float = 0.0
         self.stop_loss: float = 0.0
         self.target_1r: float = 0.0
-        self.range_width: float = 0.0
         self.highest_high: float = 0.0
         self.trailing_stop: float = 0.0
         self.partial_exit_done: bool = False
 
-        # Skip flag (same pattern as bull flag — avoids double handling
-        # when entering IN_POSITION via real-time check mid-candle)
+        # Lifecycle flag
+        self.remove_requested: bool = False   # Tells engine to drop this symbol
+
+        # Skip flag (avoids double handling on mid-candle entry)
         self._skip_current_candle: bool = False
 
         # Candle history (for context / debugging)
@@ -88,19 +104,18 @@ class ORBLiveStrategy(ILiveStrategy):
     # ── ILiveStrategy interface ───────────────────────────────────────────────
 
     def check_breakout(self, current_price: float) -> Optional[Signal]:
-        """Real-time breakout check (called every ~3 s by engine)."""
-        if self.state != StrategyState.PULLBACK:
-            return None
+        """
+        Real-time breakout check.
 
-        if current_price >= self.range_high:
-            return self._enter_position(current_price)
+        Disabled for ORB — entry requires volume confirmation which is only
+        available on completed candles.  Returns None always.
+        """
         return None
 
     def check_stop_loss(self, current_price: float) -> Optional[Signal]:
         """Real-time stop / trailing-stop / target check."""
         if self.state != StrategyState.IN_POSITION:
             return None
-
         return self._check_exit(current_price)
 
     def process_candle(self, candle: Candle) -> Optional[Signal]:
@@ -113,15 +128,14 @@ class ORBLiveStrategy(ILiveStrategy):
         if candle_time < MARKET_OPEN:
             return None
 
+        # Trade already completed — do nothing, engine will remove us
+        if self.remove_requested:
+            return None
+
         signal = None
 
         if self.state == StrategyState.SCANNING:
-            # First candle at/after 9:30 — start building range
-            self._set_state(StrategyState.BUILDING_RANGE)
-            signal = self._handle_building_range(candle)
-
-        elif self.state == StrategyState.BUILDING_RANGE:
-            signal = self._handle_building_range(candle)
+            signal = self._handle_scanning(candle, candle_time)
 
         elif self.state == StrategyState.PULLBACK:
             signal = self._handle_pullback(candle)
@@ -139,74 +153,115 @@ class ORBLiveStrategy(ILiveStrategy):
         self.prev_state = StrategyState.SCANNING
         self.range_high = 0.0
         self.range_low = float("inf")
-        self.range_candle_count = 0
-        self.range_end_time = None
+        self.range_volumes.clear()
+        self.avg_range_volume = 0.0
+        self.range_width = 0.0
+        self.range_validated = False
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.target_1r = 0.0
-        self.range_width = 0.0
         self.highest_high = 0.0
         self.trailing_stop = 0.0
         self.partial_exit_done = False
+        self.remove_requested = False
         self._skip_current_candle = False
         self.candle_history.clear()
         self._log("Strategy reset")
 
     # ── state handlers ────────────────────────────────────────────────────────
 
-    def _handle_building_range(self, candle: Candle) -> Optional[Signal]:
-        """Accumulate candles into the opening range."""
-        self.range_high = max(self.range_high, candle.high)
-        self.range_low = min(self.range_low, candle.low)
-        self.range_candle_count += 1
+    def _handle_scanning(self, candle: Candle, candle_time: dt_time) -> Optional[Signal]:
+        """
+        SCANNING state handles two phases based on time:
+          1. During range window (< range_end_time): accumulate candles
+          2. At/after range_end_time: validate range (once), then transition
+        """
+        # Phase 1: still within the range-building window
+        if candle_time < self.range_end_time:
+            self._accumulate_range(candle)
+            return None
 
-        # Calculate end time on first candle
-        if self.range_end_time is None:
-            open_minutes = MARKET_OPEN.hour * 60 + MARKET_OPEN.minute
-            end_minutes = open_minutes + self.range_minutes
-            self.range_end_time = dt_time(end_minutes // 60, end_minutes % 60)
+        # Phase 2: range window closed — validate once
+        if not self.range_validated:
+            return self._validate_range(candle)
 
-        candle_time = candle.timestamp.astimezone(ET).time()
-        self._log(
-            f"Building range ({self.range_candle_count} candles): "
-            f"H=${self.range_high:.2f} L=${self.range_low:.2f} | candle {candle_time}"
-        )
-
-        # Check if range window is complete
-        if candle_time >= self.range_end_time:
-            self.range_width = self.range_high - self.range_low
-
-            # Range filter — skip if too wide
-            mid_price = (self.range_high + self.range_low) / 2
-            if mid_price > 0 and (self.range_width / mid_price) > self.max_range_pct:
-                self._log(
-                    f"Range too wide: ${self.range_width:.2f} "
-                    f"({self.range_width / mid_price:.1%} > {self.max_range_pct:.0%}), skipping"
-                )
-                self._set_state(StrategyState.SCANNING)
-                return None
-
-            self._log(
-                f"Range complete: H=${self.range_high:.2f} L=${self.range_low:.2f} "
-                f"Width=${self.range_width:.2f} ({self.range_candle_count} candles)"
-            )
-            self._set_state(StrategyState.PULLBACK)
-
+        # Already validated — shouldn't reach here (removed or transitioned)
         return None
 
+    def _accumulate_range(self, candle: Candle):
+        """Add a candle to the opening range statistics."""
+        self.range_high = max(self.range_high, candle.high)
+        self.range_low = min(self.range_low, candle.low)
+        self.range_volumes.append(candle.volume)
+        self._log(
+            f"Range candle #{len(self.range_volumes)}: "
+            f"H=${self.range_high:.2f} L=${self.range_low:.2f} | "
+            f"candle H=${candle.high:.2f} L=${candle.low:.2f} V={candle.volume}"
+        )
+
+    def _validate_range(self, candle: Candle) -> Optional[Signal]:
+        """
+        Validate the accumulated opening range. Called once on the first
+        candle at or after range_end_time.
+
+        If invalid (no data or too wide), sets remove_requested.
+        If valid, transitions to PULLBACK and processes this candle.
+        """
+        self.range_validated = True
+
+        # No range data (stock didn't trade during the window)
+        if not self.range_volumes:
+            self._log("No range data — requesting removal")
+            self.remove_requested = True
+            return None
+
+        self.range_width = self.range_high - self.range_low
+        mid_price = (self.range_high + self.range_low) / 2
+        range_pct = self.range_width / mid_price if mid_price > 0 else 0
+
+        # Range too wide — skip this stock
+        if range_pct > self.max_range_pct:
+            self._log(
+                f"Range too wide: ${self.range_width:.2f} "
+                f"({range_pct:.1%} > {self.max_range_pct:.0%}) — requesting removal"
+            )
+            self.remove_requested = True
+            return None
+
+        # Range valid — calculate average volume and transition
+        self.avg_range_volume = sum(self.range_volumes) / len(self.range_volumes)
+        self._log(
+            f"Range valid: H=${self.range_high:.2f} L=${self.range_low:.2f} "
+            f"Width=${self.range_width:.2f} ({range_pct:.1%}) "
+            f"Candles={len(self.range_volumes)} | Avg vol={self.avg_range_volume:.0f}"
+        )
+        self._set_state(StrategyState.PULLBACK)
+
+        # Process this first post-range candle for potential breakout
+        return self._handle_pullback(candle)
+
     def _handle_pullback(self, candle: Candle) -> Optional[Signal]:
-        """Watch for breakout above range high on candle data."""
+        """Watch for breakout above range high with volume confirmation."""
         if candle.high >= self.range_high:
-            # Use candle open if it gaps above range high (realistic fill price)
+            # Volume confirmation: breakout candle must show conviction
+            vol_threshold = self.avg_range_volume * self.volume_multiplier
+            if candle.volume < vol_threshold:
+                self._log(
+                    f"Breakout attempt rejected — low volume: "
+                    f"{candle.volume:,} < {vol_threshold:,.0f} "
+                    f"({self.volume_multiplier}x avg range vol)"
+                )
+                return None
+
+            # Use candle open if it gaps above range high (realistic fill)
             entry_price = max(self.range_high, candle.open)
             return self._enter_position(entry_price)
+
         return None
 
     def _handle_in_position(self, candle: Candle) -> Optional[Signal]:
         """Manage position on candle close."""
-        # Update highest high for trailing stop
         self.highest_high = max(self.highest_high, candle.high)
-
         return self._check_exit(candle.close, candle_low=candle.low)
 
     # ── trade logic ───────────────────────────────────────────────────────────
@@ -215,7 +270,6 @@ class ORBLiveStrategy(ILiveStrategy):
         """Enter long at the given price."""
         self.entry_price = price
         self.stop_loss = self.range_low
-        self.range_width = self.range_high - self.range_low
         self.target_1r = self.entry_price + self.range_width  # 1:1 R:R
         self.highest_high = price
         self.trailing_stop = 0.0
@@ -247,12 +301,9 @@ class ORBLiveStrategy(ILiveStrategy):
         check_price = candle_low if candle_low is not None else current_price
 
         if not self.partial_exit_done:
-            # Phase 1: before 1:1 target
-            # Check stop loss first
+            # Phase 1: before 1:1 target — check stop loss first
             if check_price <= self.stop_loss:
-                self._set_state(StrategyState.SCANNING)
-                return self._emit_signal(
-                    action="SELL",
+                return self._exit_position(
                     price=self.stop_loss,
                     reason="ORB stop loss hit",
                     quantity_pct=1.0,
@@ -261,7 +312,6 @@ class ORBLiveStrategy(ILiveStrategy):
             # Check 1:1 R:R target — sell 50%
             if current_price >= self.target_1r:
                 self.partial_exit_done = True
-                # Activate trailing stop
                 self.highest_high = max(self.highest_high, current_price)
                 self.trailing_stop = self.highest_high - self.range_width
                 self._log(
@@ -271,7 +321,7 @@ class ORBLiveStrategy(ILiveStrategy):
                 return self._emit_signal(
                     action="SELL",
                     price=current_price,
-                    reason=f"ORB 1:1 R:R target hit — selling 50%",
+                    reason="ORB 1:1 R:R target hit — selling 50%",
                     quantity_pct=0.5,
                 )
         else:
@@ -280,12 +330,22 @@ class ORBLiveStrategy(ILiveStrategy):
             self.trailing_stop = self.highest_high - self.range_width
 
             if check_price <= self.trailing_stop:
-                self._set_state(StrategyState.SCANNING)
-                return self._emit_signal(
-                    action="SELL",
+                return self._exit_position(
                     price=self.trailing_stop,
                     reason=f"ORB trailing stop hit (high=${self.highest_high:.2f})",
                     quantity_pct=1.0,
                 )
 
         return None
+
+    def _exit_position(self, price: float, reason: str, quantity_pct: float) -> Signal:
+        """
+        Full exit — set state so engine removes us via _check_position_exited.
+        """
+        self._set_state(StrategyState.SCANNING)
+        return self._emit_signal(
+            action="SELL",
+            price=price,
+            reason=reason,
+            quantity_pct=quantity_pct,
+        )

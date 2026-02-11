@@ -50,11 +50,12 @@ SCAN_INTERVAL = 60  # seconds
 
 # ── Bull flag constants ───────────────────────────────────────────────────────
 BF_MAX_SYMBOLS = 3
-BF_REPLAY_MINUTES = 3
+BF_REPLAY_MINUTES = 5
 
 # ── ORB constants ─────────────────────────────────────────────────────────────
-ORB_RANGE_MINUTES = 5
-ORB_MAX_RANGE_PCT = 0.04  # skip if opening range > 4% of price
+ORB_RANGE_MINUTES = 15
+ORB_MAX_RANGE_PCT = 0.08  # skip if opening range > 8% of price
+ORB_VOLUME_MULTIPLIER = 1.5  # breakout candle volume >= avg range vol * this
 
 # ── Shared constants ─────────────────────────────────────────────────────────
 POSITION_AMOUNT = 10000  # $10k per position
@@ -66,6 +67,7 @@ def _orb_factory(symbol: str, on_signal) -> ORBLiveStrategy:
         symbol=symbol,
         range_minutes=ORB_RANGE_MINUTES,
         max_range_pct=ORB_MAX_RANGE_PCT,
+        volume_multiplier=ORB_VOLUME_MULTIPLIER,
         on_signal=on_signal,
     )
 
@@ -81,7 +83,7 @@ def main():
     logger.info("Combined Bull Flag + ORB Strategy")
     logger.info(f"Mode: {'LIVE' if args.live else 'PAPER'}")
     logger.info(f"Phase 1: Bull flag | max {BF_MAX_SYMBOLS} symbols | until {BF_CUTOFF}")
-    logger.info(f"Phase 2: ORB | {ORB_RANGE_MINUTES}-min range | max range {ORB_MAX_RANGE_PCT:.0%}")
+    logger.info(f"Phase 2: ORB | {ORB_RANGE_MINUTES}-min range | max range {ORB_MAX_RANGE_PCT:.0%} | vol x{ORB_VOLUME_MULTIPLIER}")
     logger.info(f"Position size: ${POSITION_AMOUNT:,}")
     logger.info("=" * 60)
 

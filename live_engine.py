@@ -362,10 +362,27 @@ class LiveTradingEngine:
         
         # Check for exits after processing all candles
         if self.remove_symbol:
+            self._check_remove_requested()
             self._check_pattern_failed()
             self._check_position_exited()
             self._check_scanning_timeout()
     
+    def _check_remove_requested(self) -> None:
+        """
+        Remove symbols where the strategy has requested removal.
+        
+        Strategies can set remove_requested=True to signal that they should
+        be dropped (e.g., ORB range too wide, no range data).
+        """
+        to_remove = []
+        for symbol, strategy in self.strategies.items():
+            if getattr(strategy, 'remove_requested', False):
+                to_remove.append(symbol)
+        
+        for symbol in to_remove:
+            logger.info(f"{symbol}: removal requested by strategy")
+            self._remove_symbol(symbol)
+
     def _check_pattern_failed(self) -> None:
         """
         Remove symbols where pattern failed (PULLBACK -> SCANNING).

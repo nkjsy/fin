@@ -98,6 +98,9 @@ class ILiveStrategy(ABC):
     symbol: str
     on_signal: Optional[Callable[[Signal], None]]
 
+    # Optional: strategy can request the engine to remove it
+    remove_requested: bool = False
+
     @abstractmethod
     def process_candle(self, candle: Candle) -> Optional[Signal]:
         """Process a new OHLCV candle. Return Signal if generated."""
