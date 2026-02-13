@@ -18,7 +18,7 @@ Timeline:
 Strategy:
     - Scanner confirms stocks with news, 3% gain, 5x volume
     - Track at most 3 symbols with bull flag strategy
-    - Replay last 10 min of 1-min candles when adding symbol
+    - Replay last 3 min of 1-min candles when adding symbol
     - Entry on bull flag breakout
     - Exit on stop loss or first red bar
     - If pattern fails (PULLBACK -> SCANNING), stop tracking

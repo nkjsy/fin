@@ -229,10 +229,11 @@ def parse_log_file(log_path: str) -> dict:
                 if t not in result['tickers']:
                     result['tickers'].append(t)
         
-        # Extract candle data from ENGINE logs
-        # Format: [09:40:42] [ENGINE] [09:30] MOVE: O=20.14 H=23.50 L=20.14 C=21.73 V=2056439
+        # Extract candle data from ENGINE logs (live and replay)
+        # Live:   [09:40:42] [ENGINE] [09:30] MOVE: O=20.14 H=23.50 L=20.14 C=21.73 V=2056439
+        # Replay: [08:34:40] [ENGINE] [REPLAY 08:30] PRFX: O=3.05 H=5.70 L=3.00 C=5.30 V=324254
         candle_match = re.search(
-            r"\[ENGINE\] \[(\d{2}:\d{2})\] (\w+): O=([0-9.]+) H=([0-9.]+) L=([0-9.]+) C=([0-9.]+) V=(\d+)",
+            r"\[ENGINE\] \[(?:REPLAY )?(\d{2}:\d{2})\] (\w+): O=([0-9.]+) H=([0-9.]+) L=([0-9.]+) C=([0-9.]+) V=(\d+)",
             line
         )
         if candle_match:

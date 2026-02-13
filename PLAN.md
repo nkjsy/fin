@@ -256,20 +256,26 @@ Make the engine reusable for both 1-min (premarket) and 5-min (regular) trading.
 Allow dynamic symbol addition from scanner during runtime.
 
 ```python
-def add_symbol(self, symbol: str, replay_minutes: int = 10) -> None:
+def add_symbol(self, symbol: str, replay_minutes: int = 10) -> bool:
     """Add a symbol to track. Replays last N minutes of candles to catch up."""
     if symbol in self.strategies:
-        return  # Already tracking
+        return False  # Already tracking
+    if symbol in self.traded_symbols:
+        return False  # Already traded this session
     if len(self.strategies) >= self.max_symbols:
-        return  # At capacity
+        return False  # At capacity
     
-    # Fetch and replay historical candles
-    candles = self._fetch_history(symbol, minutes=replay_minutes)
-    strategy = BullFlagLiveStrategy(...)
+    # Fetch and replay historical candles (signals disabled)
+    candles = self._fetch_history_for_replay(symbol, minutes=replay_minutes)
+    strategy = self.strategy_factory(symbol, None)  # No signals during replay
     for candle in candles:
         strategy.process_candle(candle)
     
+    # Sync prev_state to prevent false pattern-failure/position-exit removal
+    strategy.prev_state = strategy.state
+    strategy.on_signal = self._handle_signal  # Attach for live trading
     self.strategies[symbol] = strategy
+    return True
 ```
 
 #### 3. Detect pullback failure
@@ -416,7 +422,7 @@ Add `quantity_pct: float = 1.0` field to `Signal` dataclass (1.0 = full position
 
 #### 3. Create `strategy/orb_live.py` — ORB strategy
 
-`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 5), `max_range_pct` (default 0.04), `on_signal`.
+`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 15), `max_range_pct` (default 0.08), `volume_multiplier` (default 1.5), `on_signal`.
 
 State machine (all core logic in `process_candle()`, real-time checks in `check_breakout()`/`check_stop_loss()`):
 
@@ -434,14 +440,15 @@ Candles before 9:30: stored in history for context, no state changes.
 - Import from `strategy.base` instead of `strategy.bull_flag_live`
 - Type hint: `self.strategies: Dict[str, ILiveStrategy]`
 - Add `strategy_factory` param to `__init__()`: callable `(symbol, on_signal) -> ILiveStrategy`, defaults to `BullFlagLiveStrategy`
-- Update `add_symbol()`: use `self.strategy_factory(symbol, None)` instead of hardcoded `BullFlagLiveStrategy`
+- Update `add_symbol()`: use `self.strategy_factory(symbol, None)` instead of hardcoded `BullFlagLiveStrategy`. After replay, sync `prev_state = state` to prevent false removal, then attach signal handler.
 - Update `__init__` constructor loop: same factory usage
-- Update `_handle_signal()` SELL branch: use `int(position.quantity * signal.quantity_pct)` instead of `position.quantity`
+- Update `_handle_signal()` SELL branch: use `int(position.quantity * signal.quantity_pct)` instead of `position.quantity`. When SELL is rejected (no position), reset `prev_state` to prevent false position-exit removal.
+- `_fetch_candles()`: retries silently; warning logged only after all retries exhausted
 - Everything else unchanged
 
 #### 5. Create `main_combined.py` — two-phase orchestration
 
-Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 5`, `POSITION_AMOUNT = 10000`, `MAX_SYMBOLS = 3`, `REPLAY_MINUTES = 3`.
+Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 15`, `ORB_MAX_RANGE_PCT = 0.08`, `POSITION_AMOUNT = 10000`, `MAX_SYMBOLS = 3`, `BF_REPLAY_MINUTES = 10`.
 
 - Maintain `all_confirmed: Set[str]` — every scanner-confirmed symbol during Phase 1
 - **Phase 1 (7:00–9:30):** Bull flag engine with Finviz scanner loop (same as `main_premarket.py`). All confirmed symbols added to `all_confirmed`.
@@ -458,7 +465,7 @@ Add `ILiveStrategy`, `ORBLiveStrategy`, `StrategyState`, `Candle`, `Signal`.
   - Phase 1: bull flag works identically to `main_premarket.py`
   - `all_confirmed` collects all scanner-confirmed symbols
   - At 9:30: non-positioned bull flag symbols removed, positioned ones kept
-  - ORB builds range from first 5 minutes, skips stocks with range > 4%
+  - ORB builds range from first 15 minutes, skips stocks with range > 8%
   - ORB enters on breakout above range high via real-time polling
   - ORB sells 50% at 1:1 R:R, remaining 50% on trailing stop
   - Both engines coexist if bull flag has open position at 9:30

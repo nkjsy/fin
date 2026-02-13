@@ -154,6 +154,11 @@ class LiveTradingEngine:
                 
                 if position is None or position.quantity <= 0:
                     logger.info(f"No position to sell for {signal.symbol}")
+                    # Reset prev_state so _check_position_exited won't falsely
+                    # remove/burn this symbol (e.g. phantom sell from replay)
+                    strategy = self.strategies.get(signal.symbol)
+                    if strategy:
+                        strategy.prev_state = strategy.state
                     return
                 
                 # Support partial sells via quantity_pct
@@ -232,7 +237,8 @@ class LiveTradingEngine:
         Fetch candles for a symbol at the configured interval.
         
         Uses slot-based tracking to ensure complete candles are included and
-        incomplete ones excluded. Retries on API failure or missing slots.
+        incomplete ones excluded. Retries silently on API failure or missing
+        slots; a warning is logged only after all retries are exhausted.
         
         Args:
             symbol: Stock symbol
@@ -316,16 +322,14 @@ class LiveTradingEngine:
                 missing_slots = expected_slots - received_slots
                 
                 if missing_slots and attempt < self.MAX_RETRIES - 1:
-                    # Retry if slots are missing
-                    missing_times = [self._slot_to_time_str(s) for s in sorted(missing_slots)]
-                    logger.info(f"{symbol}: Retry {attempt + 1}/{self.MAX_RETRIES} - missing slots {missing_times}")
+                    # Retry silently if slots are missing
                     time.sleep(self.RETRY_DELAYS[attempt])
                     continue
                 
-                # Log warning if still missing after all retries
+                # Log warning only after all retries exhausted
                 if missing_slots:
                     missing_times = [self._slot_to_time_str(s) for s in sorted(missing_slots)]
-                    logger.info(f"{symbol}: WARNING - missing candles for slots {missing_times}")
+                    logger.info(f"{symbol}: missing candles for slots {missing_times}")
                 
                 # Sort by timestamp and update last processed slot
                 result.sort(key=lambda c: c.timestamp)
@@ -471,7 +475,9 @@ class LiveTradingEngine:
         Add a symbol to track. Replays last N minutes of candles to catch up.
         
         Signals are disabled during replay to prevent trading on historical data.
-        After replay, the signal handler is attached for live trading only.
+        After replay, prev_state is synced to state to prevent false
+        pattern-failure or position-exit removal, then the signal handler is
+        attached for live trading.
         
         Args:
             symbol: Stock symbol to add
@@ -507,6 +513,10 @@ class LiveTradingEngine:
                 f"L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}"
             )
             strategy.process_candle(candle)
+        
+        # Reset prev_state to prevent false pattern-failure removal
+        # (replay may have caused PULLBACK -> SCANNING transitions)
+        strategy.prev_state = strategy.state
         
         # Now attach the signal handler for live trading
         strategy.on_signal = self._handle_signal

@@ -50,7 +50,7 @@ SCAN_INTERVAL = 60  # seconds
 
 # ── Bull flag constants ───────────────────────────────────────────────────────
 BF_MAX_SYMBOLS = 3
-BF_REPLAY_MINUTES = 5
+BF_REPLAY_MINUTES = 10
 
 # ── ORB constants ─────────────────────────────────────────────────────────────
 ORB_RANGE_MINUTES = 15
