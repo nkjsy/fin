@@ -58,7 +58,8 @@ ORB_MAX_RISK_PER_TRADE = 800  # max $800 risk per ORB trade (risk-based sizing)
 ORB_VOLUME_MULTIPLIER = 1.5  # breakout candle volume >= avg range vol * this
 
 # ── Shared constants ─────────────────────────────────────────────────────────
-POSITION_AMOUNT = 10000  # $10k per position
+INITIAL_CASH = 100000     # starting paper account balance
+POSITION_AMOUNT = 100000  # max $ deployed per position
 
 
 def _orb_factory(symbol: str, on_signal) -> ORBLiveStrategy:
@@ -83,12 +84,12 @@ def main():
     logger.info(f"Mode: {'LIVE' if args.live else 'PAPER'}")
     logger.info(f"Phase 1: Bull flag | max {BF_MAX_SYMBOLS} symbols | until {BF_CUTOFF}")
     logger.info(f"Phase 2: ORB | {ORB_RANGE_MINUTES}-min range | max risk ${ORB_MAX_RISK_PER_TRADE} | vol x{ORB_VOLUME_MULTIPLIER}")
-    logger.info(f"Position size: ${POSITION_AMOUNT:,}")
+    logger.info(f"Cash: ${INITIAL_CASH:,} | Position size: ${POSITION_AMOUNT:,}")
     logger.info("=" * 60)
 
     # ── shared components ─────────────────────────────────────────────────────
     client_wrapper = AutoRefreshSchwabClient()
-    broker = SchwabBroker(client_wrapper) if args.live else PaperBroker()
+    broker = SchwabBroker(client_wrapper) if args.live else PaperBroker(initial_cash=INITIAL_CASH)
     provider = SchwabProvider(client_wrapper)
     scanner = FinvizNewsScanner(provider)
 
