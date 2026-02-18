@@ -41,7 +41,6 @@ class ORBLiveStrategy(ILiveStrategy):
         self,
         symbol: str,
         range_minutes: int = 15,
-        max_range_pct: float = 0.10,
         volume_multiplier: float = 1.5,
         on_signal: Optional[Callable[[Signal], None]] = None,
     ):
@@ -49,13 +48,11 @@ class ORBLiveStrategy(ILiveStrategy):
         Args:
             symbol:            Ticker symbol this instance tracks
             range_minutes:     Minutes after 9:30 to build the opening range
-            max_range_pct:     Max allowed range width as fraction of price (0.08 = 8%)
             volume_multiplier: Breakout candle volume must be >= avg_range_vol * this
             on_signal:         Callback fired on BUY / SELL signals
         """
         self.symbol = symbol
         self.range_minutes = range_minutes
-        self.max_range_pct = max_range_pct
         self.volume_multiplier = volume_multiplier
         self.on_signal = on_signal
 
@@ -219,16 +216,9 @@ class ORBLiveStrategy(ILiveStrategy):
         mid_price = (self.range_high + self.range_low) / 2
         range_pct = self.range_width / mid_price if mid_price > 0 else 0
 
-        # Range too wide — skip this stock
-        if range_pct > self.max_range_pct:
-            self._log(
-                f"Range too wide: ${self.range_width:.2f} "
-                f"({range_pct:.1%} > {self.max_range_pct:.0%}) — requesting removal"
-            )
-            self.remove_requested = True
-            return None
-
         # Range valid — calculate average volume and transition
+        # (Position sizing is risk-based in the engine, so wide ranges
+        #  are handled by smaller positions rather than outright rejection)
         self.avg_range_volume = sum(self.range_volumes) / len(self.range_volumes)
         self._log(
             f"Range valid: H=${self.range_high:.2f} L=${self.range_low:.2f} "

@@ -362,12 +362,12 @@ Run two strategies sequentially in one session: bull flag during premarket (7:00
 |------|-------|
 | Candidates | All stocks confirmed by Finviz scanner during premarket Phase 1 |
 | Range window | First 5 minutes after open (9:30–9:35), configurable |
-| Range filter | Skip if range width > 4% of price (risk too large) |
+| Range filter | No hard cap — risk-based position sizing handles wide ranges |
 | Entry | Price breaks above range high |
 | Stop loss | Range low |
 | Take profit (Phase 1) | 1:1 R:R target → sell 50% position |
 | Take profit (Phase 2) | Trailing stop at range_width below highest price → sell remaining 50% |
-| Position size | $10,000 each |
+| Position size | Risk-based: `max_risk / (entry - stop)`, capped at $10,000 per position |
 | No max symbol limit | ORB runs on all premarket-confirmed stocks |
 
 ### Two-Phase Session
@@ -422,13 +422,13 @@ Add `quantity_pct: float = 1.0` field to `Signal` dataclass (1.0 = full position
 
 #### 3. Create `strategy/orb_live.py` — ORB strategy
 
-`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 15), `max_range_pct` (default 0.08), `volume_multiplier` (default 1.5), `on_signal`.
+`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 15), `volume_multiplier` (default 1.5), `on_signal`.
 
 State machine (all core logic in `process_candle()`, real-time checks in `check_breakout()`/`check_stop_loss()`):
 
 | State | Behavior |
 |-------|----------|
-| `BUILDING_RANGE` | Collect candles from 9:30 for `range_minutes` mins. Track `range_high`, `range_low`. Transition to `PULLBACK` when range complete. Skip if range width > `max_range_pct`. |
+| `BUILDING_RANGE` | Collect candles from 9:30 for `range_minutes` mins. Track `range_high`, `range_low`. Transition to `PULLBACK` when range complete. |
 | `PULLBACK` | Watch for breakout. `check_breakout(price)`: if `price >= range_high` → BUY signal, enter `IN_POSITION`. `process_candle()`: same check on candle high. |
 | `IN_POSITION` | Two sub-phases controlled by `self.partial_exit_done` flag. Before 1:1 target: `check_stop_loss(price)` at `range_low` (sell 100%), or sell 50% at 1:1 R:R target. After 1:1 target: trailing stop at `highest_high - range_width` (sell 100%). |
 | `SCANNING` | Done. Strategy finished for this symbol. |
@@ -448,7 +448,7 @@ Candles before 9:30: stored in history for context, no state changes.
 
 #### 5. Create `main_combined.py` — two-phase orchestration
 
-Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 15`, `ORB_MAX_RANGE_PCT = 0.08`, `POSITION_AMOUNT = 10000`, `MAX_SYMBOLS = 3`, `BF_REPLAY_MINUTES = 10`.
+Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 15`, `ORB_MAX_RISK_PER_TRADE = 800`, `POSITION_AMOUNT = 10000`, `MAX_SYMBOLS = 3`, `BF_REPLAY_MINUTES = 10`.
 
 - Maintain `all_confirmed: Set[str]` — every scanner-confirmed symbol during Phase 1
 - **Phase 1 (7:00–9:30):** Bull flag engine with Finviz scanner loop (same as `main_premarket.py`). All confirmed symbols added to `all_confirmed`.

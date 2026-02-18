@@ -55,6 +55,7 @@ class LiveTradingEngine:
         candle_interval: int = 5,
         extended_hours: bool = False,
         position_amount: Optional[float] = None,
+        max_risk_per_trade: Optional[float] = None,
         max_symbols: int = 10,
         remove_symbol: bool = False,
         strategy_factory=None
@@ -68,7 +69,12 @@ class LiveTradingEngine:
             symbols: List of symbols to trade (optional, can add dynamically)
             candle_interval: Candle interval in minutes (1 or 5)
             extended_hours: Enable premarket/afterhours data
-            position_amount: Fixed position size in dollars (if None, uses 25% of buying power)
+            position_amount: Fixed position size in dollars (if None, uses 25% of buying power).
+                             Also used as the maximum position size cap when risk-based sizing is active.
+            max_risk_per_trade: Max dollar risk per trade. When set and the BUY signal includes
+                                stop_loss, position size = max_risk / (entry - stop). The result
+                                is capped by position_amount so we never exceed the dollar cap.
+                                When None, falls back to fixed position_amount sizing.
             max_symbols: Maximum number of symbols to track
             remove_symbol: If True, remove symbol after pattern fail, position close, or scanning timeout
             strategy_factory: Callable(symbol, on_signal) -> ILiveStrategy.
@@ -80,6 +86,7 @@ class LiveTradingEngine:
         self.candle_interval = candle_interval
         self.extended_hours = extended_hours
         self.position_amount = position_amount
+        self.max_risk_per_trade = max_risk_per_trade
         self.max_symbols = max_symbols
         self.remove_symbol = remove_symbol
         self.strategy_factory = strategy_factory or (
@@ -125,7 +132,25 @@ class LiveTradingEngine:
         try:
             if signal.action == "BUY":
                 # Calculate position size
-                if self.position_amount is not None:
+                if (
+                    self.max_risk_per_trade is not None
+                    and signal.stop_loss is not None
+                    and signal.price > signal.stop_loss
+                ):
+                    # Risk-based sizing: size position so max loss = max_risk_per_trade
+                    risk_per_share = signal.price - signal.stop_loss
+                    quantity = int(self.max_risk_per_trade / risk_per_share)
+                    # Cap at position_amount if set (never exceed the dollar limit)
+                    if self.position_amount is not None:
+                        max_qty = int(self.position_amount / signal.price)
+                        quantity = min(quantity, max_qty)
+                    pos_value = quantity * signal.price
+                    logger.info(
+                        f"Risk-based sizing: risk/share=${risk_per_share:.2f} | "
+                        f"max_risk=${self.max_risk_per_trade:.0f} | "
+                        f"{quantity} shares (${pos_value:,.0f})"
+                    )
+                elif self.position_amount is not None:
                     # Use fixed position amount
                     quantity = int(self.position_amount / signal.price)
                 else:
