@@ -103,6 +103,7 @@ def main():
         position_amount=POSITION_AMOUNT,
         max_symbols=BF_MAX_SYMBOLS,
         remove_symbol=True,
+        scanning_timeout_minutes=LiveTradingEngine.SCANNING_TIMEOUT_MINUTES,
         # default strategy_factory → BullFlagLiveStrategy
     )
 
@@ -220,6 +221,7 @@ def main():
                 max_symbols=len(all_confirmed) + 10,  # effectively unlimited
                 remove_symbol=True,
                 strategy_factory=_orb_factory,
+                # no scanning timeout — ORB needs the full range window
             )
             orb_engine.running = True
 

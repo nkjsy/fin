@@ -58,7 +58,8 @@ class LiveTradingEngine:
         max_risk_per_trade: Optional[float] = None,
         max_symbols: int = 10,
         remove_symbol: bool = False,
-        strategy_factory=None
+        strategy_factory=None,
+        scanning_timeout_minutes: Optional[int] = None,
     ):
         """
         Initialize LiveTradingEngine.
@@ -76,9 +77,11 @@ class LiveTradingEngine:
                                 is capped by position_amount so we never exceed the dollar cap.
                                 When None, falls back to fixed position_amount sizing.
             max_symbols: Maximum number of symbols to track
-            remove_symbol: If True, remove symbol after pattern fail, position close, or scanning timeout
+            remove_symbol: If True, remove symbol after pattern fail or position close
             strategy_factory: Callable(symbol, on_signal) -> ILiveStrategy.
                               Defaults to BullFlagLiveStrategy for backward compatibility.
+            scanning_timeout_minutes: Minutes before removing a symbol stuck in SCANNING state.
+                                      None disables the timeout entirely.
         """
         self.client_wrapper = client_wrapper
         self.broker = broker
@@ -89,6 +92,7 @@ class LiveTradingEngine:
         self.max_risk_per_trade = max_risk_per_trade
         self.max_symbols = max_symbols
         self.remove_symbol = remove_symbol
+        self.scanning_timeout_minutes = scanning_timeout_minutes
         self.strategy_factory = strategy_factory or (
             lambda sym, on_sig: BullFlagLiveStrategy(symbol=sym, on_signal=on_sig)
         )
@@ -477,9 +481,13 @@ class LiveTradingEngine:
         
         If a symbol hasn't entered PULLBACK or IN_POSITION within the timeout,
         it's not showing the pattern we want - remove it to make room for others.
+        Disabled when scanning_timeout_minutes is None.
         """
+        if self.scanning_timeout_minutes is None:
+            return
+
         now = datetime.now(self.ET)
-        timeout = timedelta(minutes=self.SCANNING_TIMEOUT_MINUTES)
+        timeout = timedelta(minutes=self.scanning_timeout_minutes)
         to_remove = []
         
         for symbol, strategy in self.strategies.items():
@@ -492,7 +500,7 @@ class LiveTradingEngine:
                 to_remove.append(symbol)
         
         for symbol in to_remove:
-            logger.info(f"{symbol}: SCANNING timeout ({self.SCANNING_TIMEOUT_MINUTES} min), removing from tracking")
+            logger.info(f"{symbol}: SCANNING timeout ({self.scanning_timeout_minutes} min), removing from tracking")
             self._remove_symbol(symbol)
     
     def add_symbol(self, symbol: str, replay_minutes: int = 10) -> bool:

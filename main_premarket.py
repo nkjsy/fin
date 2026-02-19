@@ -94,7 +94,8 @@ def main():
         extended_hours=True,
         position_amount=POSITION_AMOUNT,
         max_symbols=MAX_SYMBOLS,
-        remove_symbol=True  # Remove symbols after pattern fail, position close, or scanning timeout
+        remove_symbol=True,
+        scanning_timeout_minutes=LiveTradingEngine.SCANNING_TIMEOUT_MINUTES,
     )
     
     try:
