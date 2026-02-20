@@ -42,6 +42,7 @@ class ORBLiveStrategy(ILiveStrategy):
         symbol: str,
         range_minutes: int = 15,
         volume_multiplier: float = 1.5,
+        min_range_candles: int = 10,
         on_signal: Optional[Callable[[Signal], None]] = None,
     ):
         """
@@ -49,11 +50,13 @@ class ORBLiveStrategy(ILiveStrategy):
             symbol:            Ticker symbol this instance tracks
             range_minutes:     Minutes after 9:30 to build the opening range
             volume_multiplier: Breakout candle volume must be >= avg_range_vol * this
+            min_range_candles: Minimum candles required during range window (liquidity gate)
             on_signal:         Callback fired on BUY / SELL signals
         """
         self.symbol = symbol
         self.range_minutes = range_minutes
         self.volume_multiplier = volume_multiplier
+        self.min_range_candles = min_range_candles
         self.on_signal = on_signal
 
         # State tracking
@@ -209,6 +212,15 @@ class ORBLiveStrategy(ILiveStrategy):
         # No range data (stock didn't trade during the window)
         if not self.range_volumes:
             self._log("No range data — requesting removal")
+            self.remove_requested = True
+            return None
+
+        # Too few candles — stock is too illiquid for reliable range
+        if len(self.range_volumes) < self.min_range_candles:
+            self._log(
+                f"Too few range candles: {len(self.range_volumes)} < "
+                f"{self.min_range_candles} required — requesting removal"
+            )
             self.remove_requested = True
             return None
 

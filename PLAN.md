@@ -422,7 +422,7 @@ Add `quantity_pct: float = 1.0` field to `Signal` dataclass (1.0 = full position
 
 #### 3. Create `strategy/orb_live.py` — ORB strategy
 
-`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 15), `volume_multiplier` (default 1.5), `on_signal`.
+`ORBLiveStrategy(ILiveStrategy)` with params: `symbol`, `range_minutes` (default 15), `volume_multiplier` (default 1.5), `min_range_candles` (default 10), `on_signal`.
 
 State machine (all core logic in `process_candle()`, real-time checks in `check_breakout()`/`check_stop_loss()`):
 
@@ -448,7 +448,7 @@ Candles before 9:30: stored in history for context, no state changes.
 
 #### 5. Create `main_combined.py` — two-phase orchestration
 
-Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 15`, `ORB_MAX_RISK_PER_TRADE = 800`, `POSITION_AMOUNT = 10000`, `MAX_SYMBOLS = 3`, `BF_REPLAY_MINUTES = 10`.
+Entry point with `--live` flag only. Constants: `BF_CUTOFF = dt_time(9, 30)`, `ORB_RANGE_MINUTES = 15`, `ORB_MAX_RISK_PER_TRADE = 800`, `ORB_MIN_RANGE_CANDLES = 10`, `POSITION_AMOUNT = 100000`, `INITIAL_CASH = 100000`, `MAX_SYMBOLS = 3`, `BF_REPLAY_MINUTES = 10`.
 
 - Maintain `all_confirmed: Set[str]` — every scanner-confirmed symbol during Phase 1
 - **Phase 1 (7:00–9:30):** Bull flag engine with Finviz scanner loop (same as `main_premarket.py`). All confirmed symbols added to `all_confirmed`.
@@ -465,7 +465,7 @@ Add `ILiveStrategy`, `ORBLiveStrategy`, `StrategyState`, `Candle`, `Signal`.
   - Phase 1: bull flag works identically to `main_premarket.py`
   - `all_confirmed` collects all scanner-confirmed symbols
   - At 9:30: non-positioned bull flag symbols removed, positioned ones kept
-  - ORB builds range from first 15 minutes, skips stocks with range > 8%
+  - ORB builds range from first 15 minutes, rejects stocks with < 10 candles (illiquidity gate)
   - ORB enters on breakout above range high via real-time polling
   - ORB sells 50% at 1:1 R:R, remaining 50% on trailing stop
   - Both engines coexist if bull flag has open position at 9:30
