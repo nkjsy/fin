@@ -30,9 +30,20 @@ class YFinanceProvider(IDataProvider):
             
             # Reset index to make Date/Datetime a column
             df = df.reset_index()
-            
-            # Standardize column names if necessary (yfinance is usually Title Case)
-            # Ensure we have: Date, Open, High, Low, Close, Volume
+
+            date_col = "Datetime" if "Datetime" in df.columns else "Date"
+            required_cols = [date_col, "Open", "High", "Low", "Close", "Volume"]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                return pd.DataFrame()
+
+            df = df[required_cols].copy()
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
+            for col in ["Open", "High", "Low", "Close", "Volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            df = df.dropna(subset=[date_col, "Open", "High", "Low", "Close", "Volume"])
             return df
         except Exception as e:
             print(f"Error fetching {ticker}: {e}")

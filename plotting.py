@@ -15,6 +15,45 @@ STATE_COLORS = {
 }
 
 
+def plot_equity_comparison(strategy_equity, benchmark_equity, benchmark_label="Benchmark", title="Equity Comparison"):
+    """Plot simple strategy-vs-benchmark equity curves."""
+    strategy_series = pd.Series(strategy_equity).dropna()
+    benchmark_series = pd.Series(benchmark_equity).dropna()
+
+    if strategy_series.empty or benchmark_series.empty:
+        print("No equity data available for comparison plot.")
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=strategy_series.index,
+            y=strategy_series.values,
+            mode="lines",
+            name="Strategy",
+            line=dict(color="#0b6e4f", width=2.5),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=benchmark_series.index,
+            y=benchmark_series.values,
+            mode="lines",
+            name=benchmark_label,
+            line=dict(color="#b5651d", width=2.0),
+        )
+    )
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title="Equity",
+        template="plotly_white",
+        height=650,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+    )
+    fig.show()
+
+
 def plot_performance(ticker, df_res, trades, timeframe, strategy_name, title_prefix="", trading_date=None, show_states=False):
     """
     Plot candlestick chart with volume overlay and buy/sell markers.
