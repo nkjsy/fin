@@ -4,8 +4,8 @@ import pandas as pd
 import argparse
 from datetime import datetime
 from typing import Dict
-
 from zoneinfo import ZoneInfo
+
 from live_signal_state import load_latest_holdings, write_state_file
 from logger import enable_file_logging, get_logger
 from strategy.momentum_11_1 import Momentum11_1Strategy
@@ -39,7 +39,6 @@ def build_target_plan(as_of: datetime):
     strategy_up = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=TOP_N_UP)
     strategy_down = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=TOP_N_DOWN)
 
-    # On month-end, refresh current constituents file first; otherwise load current file/fallback.
     month_end_today = (as_of.date() == (pd.Timestamp(as_of.date()) + pd.offsets.BMonthEnd(0)).date())
     if month_end_today:
         universe = refresh_current_nasdaq100_constituents(as_of=as_of)
@@ -58,7 +57,6 @@ def build_target_plan(as_of: datetime):
     trend_ok = bench_close > qqq_ma
 
     close_matrix = strategy_up.build_close_matrix(price_data).sort_index().ffill()
-    # Live mode uses current constituent universe only (not historical monthly membership).
     latest_ts = pd.Timestamp(close_matrix.index[-1])
     latest_naive = latest_ts.tz_localize(None) if latest_ts.tz is not None else latest_ts
     month_end_key = latest_naive.to_period('M').to_timestamp('M')
@@ -105,7 +103,8 @@ def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str
         elif delta < 0:
             lines.append(f'SELL | {symbol} | price=${px:.2f} | delta={abs(delta)} | current={current_qty} | target={target_qty}')
         else:
-            lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
+            if symbol != 'NONE':
+                lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
     return lines
 
 
@@ -148,9 +147,10 @@ def main():
     logger.info(f"  Reason: {regime['reason']}")
     logger.info('-' * 60)
     logger.info('CURRENT HOLDINGS')
-    if current_holdings:
-        for symbol in sorted(current_holdings):
-            logger.info(f'  {symbol}: {current_holdings[symbol]} shares')
+    filtered_holdings = {k: v for k, v in current_holdings.items() if k != 'NONE'}
+    if filtered_holdings:
+        for symbol in sorted(filtered_holdings):
+            logger.info(f'  {symbol}: {filtered_holdings[symbol]} shares')
     else:
         logger.info('  none')
     logger.info('-' * 60)
@@ -171,7 +171,7 @@ def main():
     path = write_state_file(
         as_of=now_et,
         mode=mode,
-        current_holdings=current_holdings,
+        current_holdings=filtered_holdings,
         target_shares=target_shares,
         quotes=quotes,
         orders=order_lines,
