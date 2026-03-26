@@ -292,3 +292,58 @@ After the core strategy is working, consider:
 4. Volatility scaling or risk parity weighting
 5. Regime filter overlay using existing daily regime work
 6. Walk-forward parameter validation
+
+---
+
+## 15) Tested Regime Variants Summary (2026-03)
+
+### Best current variant
+
+**Recommended script:** `main_momentum_11_1_regime_immediate.py`
+
+**Current default logic:**
+- If `QQQ > MA200` → hold **Top3**
+- If `QQQ < MA200` → hold **Top10**
+- Regime is checked **daily** and the portfolio switches immediately between the precomputed monthly Top3 and Top10 lists.
+- Cross-sectional ranking is still computed from the monthly 11-1 momentum snapshot; the strategy does **not** recompute a fresh daily cross-section.
+
+### Immediate-switch regime logic
+
+1. At each monthly rebalance point, compute:
+   - the month's **Top3** momentum basket
+   - the month's **Top10** momentum basket
+2. On every trading day after that, check whether `QQQ` is above or below its 200-day moving average.
+3. If above MA200, hold the month's **Top3** basket.
+4. If below MA200, expand defensively into the month's **Top10** basket.
+5. At the next monthly rebalance, refresh both baskets and continue the same daily regime switching.
+
+### Why this design worked best
+
+- It preserves the strength of concentrated momentum exposure in strong markets.
+- It reduces single-name concentration risk during weaker market regimes without fully exiting the market.
+- It avoids the overreaction and whipsaw risk of full cash filters.
+- It keeps the cross-sectional ranking cadence consistent with the original monthly 11-1 strategy.
+
+### Performance comparison table
+
+| Variant | CAGR | MaxDD | Sharpe | Calmar | Total Return |
+|---|---:|---:|---:|---:|---:|
+| Top10 original | 22.38% | -42.82% | 0.851 | 0.523 | +2531.30% |
+| Top5 original | 31.17% | -52.10% | 0.987 | 0.598 | +7991.45% |
+| Top5 + MA200 flat below | 25.68% | -42.26% | 0.915 | 0.608 | +3948.63% |
+| Top5 + MA300 flat below | 23.28% | -48.56% | 0.834 | 0.479 | +2860.33% |
+| Top5 + MA200 confirm 5d then flat | 27.01% | -52.09% | 0.934 | 0.519 | +4701.67% |
+| Top5 + MA200 below => 50% exposure | 28.71% | -46.97% | 0.976 | 0.611 | +5851.71% |
+| Top10 + MA200 below => 50% exposure | 19.77% | -37.95% | 0.816 | 0.521 | +1755.40% |
+| Top5 above / Top10 below (full, monthly switch) | 31.67% | -50.09% | 1.012 | 0.632 | +8497.81% |
+| Top5 above / Top10 below (half, monthly switch) | 28.86% | -45.38% | 0.984 | 0.636 | +5962.55% |
+| **Top3 above / Top10 below (full, immediate switch)** | **37.85%** | **-48.71%** | **1.069** | **0.777** | **+18000.23%** |
+
+### Chart artifacts
+
+Generated chart files:
+- `immediate_regime_switch.png` — current best variant chart
+- `top5_top10_full.png` — Top5 above / Top10 below full-switch chart
+- `top5_top10_half.png` — Top5 above / Top10 below half-switch chart
+
+If you want these tracked in git long-term, decide first whether strategy output artifacts should live in-repo or under a separate reports/ directory.
