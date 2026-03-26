@@ -15,9 +15,9 @@ from main_momentum_11_1_regime_immediate import (
     TOP_N_UP,
     TOP_N_DOWN,
     MA_DAYS,
-    load_membership,
     fetch_history_yf,
 )
+from utils import refresh_current_nasdaq100_constituents, load_current_nasdaq100_constituents
 
 enable_file_logging()
 logger = get_logger('MOMO-LIVE-MAIN')
@@ -38,7 +38,13 @@ def build_target_plan(as_of: datetime):
     strategy_up = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=TOP_N_UP)
     strategy_down = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=TOP_N_DOWN)
 
-    universe_by_month, universe = load_membership(strategy_up)
+    # On month-end, refresh current constituents file first; otherwise load current file/fallback.
+    month_end_today = (as_of.date() == (pd.Timestamp(as_of.date()) + pd.offsets.BMonthEnd(0)).date())
+    if month_end_today:
+        universe = refresh_current_nasdaq100_constituents(as_of=as_of)
+    else:
+        universe = load_current_nasdaq100_constituents()
+
     price_data = {}
     for ticker in universe:
         df = fetch_history_yf(ticker)
@@ -51,8 +57,13 @@ def build_target_plan(as_of: datetime):
     trend_ok = bench_close > qqq_ma
 
     close_matrix = strategy_up.build_close_matrix(price_data).sort_index().ffill()
-    _, sel_up = strategy_up.select_portfolio(close_matrix, eligible_universe_by_date=universe_by_month)
-    _, sel_down = strategy_down.select_portfolio(close_matrix, eligible_universe_by_date=universe_by_month)
+    # Live mode uses current constituent universe only (not historical monthly membership).
+    latest_ts = pd.Timestamp(close_matrix.index[-1])
+    latest_naive = latest_ts.tz_localize(None) if latest_ts.tz is not None else latest_ts
+    month_end_key = latest_naive.to_period('M').to_timestamp('M')
+    current_universe_map = {month_end_key: universe}
+    _, sel_up = strategy_up.select_portfolio(close_matrix, eligible_universe_by_date=current_universe_map)
+    _, sel_down = strategy_down.select_portfolio(close_matrix, eligible_universe_by_date=current_universe_map)
 
     latest_date = close_matrix.index[-1]
     qqq_close = float(bench_close.asof(latest_date)) if pd.notna(bench_close.asof(latest_date)) else 0.0
