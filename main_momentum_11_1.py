@@ -1,14 +1,12 @@
 import pandas as pd
 
-from client import AutoRefreshSchwabClient
 from data_manager import DataManager
-from main_index_regime_daily import compute_performance_stats
+from perf_stats import compute_performance_stats
 from plotting import plot_equity_comparison
 from portfolio_backtester import PortfolioBacktester
-from providers.schwab_lib import SchwabProvider
 from providers.yfinance_lib import YFinanceProvider
 from strategy.momentum_11_1 import Momentum11_1Strategy
-from utils import get_nasdaq100_tickers, get_sp500_tickers
+from universe import get_nasdaq100_tickers, get_sp500_tickers
 
 
 DATA_DIR = "data"
@@ -25,11 +23,11 @@ TOP_N = 10
 PERIOD = "max"
 END_DATE = None
 
-REFRESH_DATA = False
+REFRESH_DATA = True
 UNIVERSE_LIMIT = 0
 PRINT_TOP_REBALANCES = 5
 PLOT_RESULT = True
-ENABLE_SCHWAB_FALLBACK = True
+ENABLE_SCHWAB_FALLBACK = False
 
 
 _SCHWAB_DATA_MANAGER = None
@@ -44,6 +42,8 @@ def get_schwab_data_manager() -> DataManager | None:
         return None
 
     try:
+        from client import AutoRefreshSchwabClient
+        from providers.schwab_lib import SchwabProvider
         client_wrapper = AutoRefreshSchwabClient()
         provider = SchwabProvider(client_wrapper)
         _SCHWAB_DATA_MANAGER = DataManager(DATA_DIR, provider)
