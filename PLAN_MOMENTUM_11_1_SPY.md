@@ -341,9 +341,26 @@ After the core strategy is working, consider:
 
 ### Chart artifacts
 
-Generated chart files:
-- `immediate_regime_switch.png` — current best variant chart
-- `top5_top10_full.png` — Top5 above / Top10 below full-switch chart
-- `top5_top10_half.png` — Top5 above / Top10 below half-switch chart
+Tracked chart files:
+- `assets/immediate_regime_switch.png` — current best variant chart
+- `assets/top5_top10_full.png` — Top5 above / Top10 below full-switch chart (add when regenerated)
+- `assets/top5_top10_half.png` — Top5 above / Top10 below half-switch chart (add when regenerated)
 
-If you want these tracked in git long-term, decide first whether strategy output artifacts should live in-repo or under a separate reports/ directory.
+### How to run
+
+Use Python directly (no shell wrapper required):
+
+```bash
+cd /home/nkjsy/fin
+source .venv312/bin/activate
+python main_momentum_11_1_nocache.py
+python main_momentum_11_1_regime_monthly.py
+python main_momentum_11_1_regime_immediate.py
+```
+
+Notes:
+- `main_momentum_11_1_regime_immediate.py` is the current recommended script.
+- Current default in the immediate script is:
+  - `QQQ > MA200` → Top3
+  - `QQQ < MA200` → Top10
+  - daily regime switching
