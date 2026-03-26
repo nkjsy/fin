@@ -338,3 +338,88 @@ if __name__ == "__main__":
     # Test 2d period - should skip weekends/holidays
     start_2d = calculate_start_date(client, "2d", end_dt)
     print(f"  2d period start: {start_2d.strftime('%Y-%m-%d %A')}")
+
+
+CURRENT_NASDAQ100_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nasdaq", "current_nasdaq100_constituents.csv")
+HIST_NASDAQ100_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nasdaq", "nasdaq100_monthly_constituents_backtest_2010_2026.csv")
+
+
+def load_latest_historical_nasdaq100_membership() -> list[str]:
+    df = pd.read_csv(HIST_NASDAQ100_FILE)
+    df["month_end_date"] = pd.to_datetime(df["month_end_date"], errors="coerce")
+    df = df.dropna(subset=["month_end_date", "ticker"])
+    latest_month = df["month_end_date"].max()
+    latest = df[df["month_end_date"] == latest_month].copy()
+    return sorted({str(t).strip().upper().replace('.', '-') for t in latest['ticker'].tolist()})
+
+
+def write_current_nasdaq100_constituents(tickers: list[str]) -> None:
+    os.makedirs(os.path.dirname(CURRENT_NASDAQ100_FILE), exist_ok=True)
+    out = pd.DataFrame({"ticker": sorted(dict.fromkeys([str(t).strip().upper().replace('.', '-') for t in tickers if t]))})
+    out.to_csv(CURRENT_NASDAQ100_FILE, index=False)
+
+
+def update_historical_nasdaq100_tail(tickers: list[str], as_of: datetime | None = None) -> None:
+    as_of = as_of or datetime.now(ZoneInfo("America/New_York"))
+    month_end = pd.Timestamp(as_of.date()).to_period("M").to_timestamp("M")
+    df = pd.read_csv(HIST_NASDAQ100_FILE)
+    df["month_end_date"] = pd.to_datetime(df["month_end_date"], errors="coerce")
+    normalized = sorted(dict.fromkeys([str(t).strip().upper().replace('.', '-') for t in tickers if t]))
+    existing_mask = df["month_end_date"] == month_end
+    cols = list(df.columns)
+    template = {c: '' for c in cols}
+    if 'month' in cols:
+        template['month'] = month_end.strftime('%Y-%m')
+    template['month_end_date'] = month_end.strftime('%Y-%m-%d')
+    if 'membership_basis' in cols:
+        template['membership_basis'] = 'month_end'
+    if 'snapshot_method' in cols:
+        template['snapshot_method'] = 'live_refresh'
+    if 'snapshot_inferred' in cols:
+        template['snapshot_inferred'] = 'no'
+    if 'membership_confidence' in cols:
+        template['membership_confidence'] = 'high'
+    if 'notes' in cols:
+        template['notes'] = 'Updated from current Nasdaq-100 constituent refresh for live trading.'
+    new_rows = []
+    for t in normalized:
+        row = template.copy()
+        row['ticker'] = t
+        if 'raw_reconstructed_ticker' in cols:
+            row['raw_reconstructed_ticker'] = t
+        new_rows.append(row)
+    if existing_mask.any():
+        first_idx = existing_mask.idxmax()
+        last_idx = df[existing_mask].index.max()
+        before = df.loc[:first_idx - 1] if first_idx > 0 else df.iloc[0:0]
+        after = df.loc[last_idx + 1:] if last_idx + 1 < len(df) else df.iloc[0:0]
+        out = pd.concat([before, pd.DataFrame(new_rows, columns=cols), after], ignore_index=True)
+    else:
+        out = pd.concat([df, pd.DataFrame(new_rows, columns=cols)], ignore_index=True)
+    out.to_csv(HIST_NASDAQ100_FILE, index=False)
+
+
+def refresh_current_nasdaq100_constituents(as_of: datetime | None = None) -> list[str]:
+    try:
+        tickers = get_nasdaq100_tickers()
+        if not tickers:
+            raise ValueError('empty current Nasdaq-100 ticker list')
+        write_current_nasdaq100_constituents(tickers)
+        update_historical_nasdaq100_tail(tickers, as_of=as_of)
+        logger.info(f"Refreshed current Nasdaq-100 constituents ({len(tickers)} names)")
+        return tickers
+    except Exception as e:
+        logger.info(f"Current Nasdaq-100 refresh failed, falling back to latest historical month: {e}")
+        tickers = load_latest_historical_nasdaq100_membership()
+        write_current_nasdaq100_constituents(tickers)
+        return tickers
+
+
+def load_current_nasdaq100_constituents() -> list[str]:
+    if os.path.exists(CURRENT_NASDAQ100_FILE):
+        df = pd.read_csv(CURRENT_NASDAQ100_FILE)
+        if 'ticker' in df.columns:
+            vals = [str(t).strip().upper().replace('.', '-') for t in df['ticker'].dropna().tolist()]
+            if vals:
+                return sorted(dict.fromkeys(vals))
+    return load_latest_historical_nasdaq100_membership()
