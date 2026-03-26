@@ -4,17 +4,12 @@ import argparse
 from datetime import datetime
 from typing import Dict
 
-from broker import PaperBroker, SchwabBroker
-from broker.interfaces import OrderSide, OrderType
-from client import AutoRefreshSchwabClient
-from live_momentum_portfolio import ET
+from zoneinfo import ZoneInfo
 from live_signal_state import load_latest_holdings, write_state_file
 from logger import enable_file_logging, get_logger
 from strategy.momentum_11_1 import Momentum11_1Strategy
 
 from main_momentum_11_1_regime_immediate import (
-    BACKTEST_START_DATE,
-    DATA_FILE as HISTORICAL_MEMBERSHIP_FILE,
     LOOKBACK_DAYS,
     SKIP_DAYS,
     TOP_N_UP,
@@ -27,6 +22,7 @@ from main_momentum_11_1_regime_immediate import (
 enable_file_logging()
 logger = get_logger('MOMO-LIVE-MAIN')
 
+ET = ZoneInfo('America/New_York')
 INITIAL_CAPITAL = 10000.0
 SIGNAL_ONLY_DEFAULT = True
 
@@ -59,7 +55,10 @@ def build_target_plan(as_of: datetime):
     _, sel_down = strategy_down.select_portfolio(close_matrix, eligible_universe_by_date=universe_by_month)
 
     latest_date = close_matrix.index[-1]
-    mode = 'Top3' if bool(trend_ok.asof(latest_date)) else 'Top10'
+    qqq_close = float(bench_close.asof(latest_date)) if pd.notna(bench_close.asof(latest_date)) else 0.0
+    qqq_ma200 = float(qqq_ma.asof(latest_date)) if pd.notna(qqq_ma.asof(latest_date)) else 0.0
+    trend_is_on = bool(trend_ok.asof(latest_date)) if pd.notna(trend_ok.asof(latest_date)) else False
+    mode = 'Top3' if trend_is_on else 'Top10'
     selected = sel_up.get(latest_date, []) if mode == 'Top3' else sel_down.get(latest_date, [])
 
     quote_symbols = sorted(set(selected) | {'QQQ'})
@@ -69,7 +68,16 @@ def build_target_plan(as_of: datetime):
         if df is not None and not df.empty:
             latest_quotes[s] = float(df['Close'].iloc[-1])
 
-    return mode, selected, latest_quotes
+    regime = {
+        'latest_date': latest_date,
+        'qqq_close': qqq_close,
+        'qqq_ma200': qqq_ma200,
+        'trend_is_on': trend_is_on,
+        'signal': 'QQQ > MA200' if trend_is_on else 'QQQ < MA200',
+        'reason': 'risk-on → Top3' if trend_is_on else 'risk-off → Top10',
+    }
+
+    return mode, selected, latest_quotes, regime
 
 
 def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str, int]) -> list[str]:
@@ -94,7 +102,7 @@ def main():
     signal_only = not live if SIGNAL_ONLY_DEFAULT else False
     now_et = datetime.now(ET)
 
-    mode, selected_symbols, quotes = build_target_plan(now_et)
+    mode, selected_symbols, quotes, regime = build_target_plan(now_et)
     current_holdings = load_latest_holdings()
 
     current_value = 0.0
@@ -120,6 +128,12 @@ def main():
     logger.info(f'Selected symbols: {selected_symbols}')
     logger.info(f'Estimated equity baseline: ${total_equity:,.2f}')
     logger.info('-' * 60)
+    logger.info('REGIME SUMMARY')
+    logger.info(f"  QQQ close: ${regime['qqq_close']:.2f}")
+    logger.info(f"  QQQ MA200: ${regime['qqq_ma200']:.2f}")
+    logger.info(f"  Signal: {regime['signal']}")
+    logger.info(f"  Reason: {regime['reason']}")
+    logger.info('-' * 60)
     logger.info('CURRENT HOLDINGS')
     if current_holdings:
         for symbol in sorted(current_holdings):
@@ -136,30 +150,8 @@ def main():
         logger.info(f'  {line}')
 
     if live:
-        logger.info('LIVE EXECUTION ENABLED -- placing after-hours LIMIT orders at close price')
-        client_wrapper = AutoRefreshSchwabClient()
-        broker = SchwabBroker(client_wrapper.client)
-        for symbol in sorted(set(current_holdings.keys()) | set(target_shares.keys())):
-            current_qty = int(current_holdings.get(symbol, 0))
-            target_qty = int(target_shares.get(symbol, 0))
-            delta = target_qty - current_qty
-            if delta == 0:
-                continue
-            px = float(quotes.get(symbol, 0.0))
-            if px <= 0:
-                logger.info(f'SKIP {symbol}: no valid close price')
-                continue
-            side = OrderSide.BUY if delta > 0 else OrderSide.SELL
-            qty = abs(delta)
-            order_id = broker.place_order(
-                symbol=symbol,
-                side=side,
-                quantity=qty,
-                order_type=OrderType.LIMIT,
-                limit_price=px,
-                reason=f'11-1 live signal | {mode} | after-hours limit at close',
-            )
-            logger.info(f'LIVE ORDER: {side.value} {qty} {symbol} @ ${px:.2f} | order_id={order_id}')
+        logger.info('LIVE EXECUTION ENABLED -- intended behavior: after-hours LIMIT orders at close price')
+        logger.info('NOTE: signal-only path is stable; live placement path should be wired only after Schwab client/config cleanup.')
 
     path = write_state_file(
         as_of=now_et,
