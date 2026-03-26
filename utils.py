@@ -1,4 +1,3 @@
-import os
 import pandas as pd
 import requests
 import sys
@@ -13,13 +12,20 @@ import threading
 from client import AutoRefreshSchwabClient
 from logger import get_logger
 
-logger = get_logger("UTILS")
 
-CURRENT_NASDAQ100_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nasdaq', 'current_nasdaq100_constituents.csv')
-HIST_NASDAQ100_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nasdaq', 'nasdaq100_monthly_constituents_backtest_2010_2026.csv')
+logger = get_logger("UTILS")
 
 
 def get_float_shares(symbol: str) -> int | None:
+    """
+    Get float shares for a symbol using yfinance.
+    
+    Args:
+        symbol: Ticker symbol
+        
+    Returns:
+        Float shares count, or None if not available
+    """
     try:
         info = yf.Ticker(symbol).info
         float_shares = info.get("floatShares")
@@ -29,63 +35,115 @@ def get_float_shares(symbol: str) -> int | None:
 
 
 def wait_for_market_open(client):
+    """Wait until market is open, using Schwab API for accurate market hours."""
+    
     ET = ZoneInfo("America/New_York")
     earliest_start = dt_time(8, 30)
     now = datetime.now(ET)
+    
+    # Fetch market hours from Schwab API
     logger.info("Fetching market hours from Schwab...")
     resp = client.get_market_hours(Client.MarketHours.Market.EQUITY, date=now.date())
+    
     if resp.status_code != httpx.codes.OK:
         logger.warning(f"Failed to get market hours (status {resp.status_code}), using defaults")
+        # Fallback to hardcoded hours
         market_open = dt_time(9, 30)
         market_close = dt_time(16, 0)
     else:
         data = resp.json()
+        # Parse the response to get market hours
+        # Response structure: {"equity": {"EQ": {...}}} or {"equity": {"equity": {...}}}
         equity_data = data.get("equity", {})
         market_info = equity_data.get("EQ") or equity_data.get("equity") or {}
+        
         if not market_info.get("isOpen", False):
+            # Market is closed (weekend/holiday)
             logger.info(f"Market is closed today ({now.strftime('%A, %B %d, %Y')})")
+            logger.info("This could be a weekend or market holiday.")
             sys.exit(0)
+        
+        # Parse session hours (format: "2024-01-15T09:30:00-05:00")
         session_hours = market_info.get("sessionHours", {})
         regular_market = session_hours.get("regularMarket", [])
+        
         if not regular_market:
             logger.error("Could not find regular market hours in API response")
             sys.exit(1)
+        
+        # Get start and end times
         start_str = regular_market[0].get("start")
         end_str = regular_market[0].get("end")
+        
         market_open = datetime.fromisoformat(start_str).time()
         market_close = datetime.fromisoformat(end_str).time()
+        
         logger.info(f"Market hours today: {market_open.strftime('%H:%M')} - {market_close.strftime('%H:%M')} ET")
+    
     current_time = now.time()
+    
+    # Check if market is currently open
     if market_open <= current_time < market_close:
         logger.info("Market is already open")
         return
+    
+    # Check if market has closed for today
     if current_time >= market_close:
         logger.info(f"Market is closed for today (closed at {market_close.strftime('%H:%M')} ET, current time: {current_time.strftime('%H:%M')} ET)")
+        logger.info("Please run again tomorrow before market close.")
         sys.exit(0)
+    
+    # Check if it's too early
     if current_time < earliest_start:
         logger.info(f"Too early to start (current time: {current_time.strftime('%H:%M')} ET)")
+        logger.info("Please run again after 8:30 AM ET.")
         sys.exit(0)
+    
     logger.info(f"Waiting for market open at {market_open.strftime('%H:%M')} ET...")
+    
     while datetime.now(ET).time() < market_open:
         now_et = datetime.now(ET)
         target = datetime.combine(now_et.date(), market_open, tzinfo=ET)
         remaining = target - now_et
+        
+        minutes = remaining.seconds // 60
+        if minutes > 0:
+            logger.info(f"  {minutes} minutes until market open...")
+        
+        # Sleep in intervals
         sleep_time = min(60, remaining.seconds)
         if sleep_time > 0:
             time.sleep(sleep_time)
+    
     logger.info("Market is open!")
 
 
 def wait_until_time(hour: int, minute: int, description: str = None):
+    """
+    Wait until a specific time in Eastern Time.
+    
+    Args:
+        hour: Target hour (0-23)
+        minute: Target minute (0-59)
+        description: Optional description for logging (e.g., "volume check")
+    
+    Returns:
+        True if waited, False if already past target time
+    """
     ET = ZoneInfo("America/New_York")
     now = datetime.now(ET)
     target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    
     time_str = f"{hour}:{minute:02d} AM" if hour < 12 else f"{hour-12 if hour > 12 else 12}:{minute:02d} PM"
+    
     if now >= target_time:
         logger.info(f"Already past {time_str} ET" + (f", proceeding with {description}..." if description else ""))
         return False
+    
     wait_seconds = (target_time - now).total_seconds()
     logger.info(f"Waiting until {time_str} ET ({wait_seconds:.0f} seconds)...")
+    
+    # Wait with progress updates
     while datetime.now(ET) < target_time:
         remaining = (target_time - datetime.now(ET)).total_seconds()
         if remaining > 60:
@@ -93,18 +151,20 @@ def wait_until_time(hour: int, minute: int, description: str = None):
             time.sleep(30)
         else:
             time.sleep(5)
+    
     logger.info(f"{time_str} ET reached" + (f", {description}..." if description else ""))
     return True
 
 
 def get_sp500_tickers():
     try:
+        # Requires lxml or html5lib
         table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
         df = table[0]
         return df['Symbol'].tolist()
     except Exception as e:
         print(f"Error fetching S&P 500: {e}")
-        return ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"]
+        return ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"] # Fallback
 
 
 def get_nasdaq100_tickers():
@@ -123,86 +183,220 @@ def get_nasdaq100_tickers():
         print(f"Error fetching Nasdaq-100: {e}")
         return ["AAPL", "MSFT", "NVDA", "AMZN", "META"]
 
+def get_us_stocks(limit=-1):
+    url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        rows = data['data']['rows']
+        df = pd.DataFrame(rows)
+        
+        # Clean symbols
+        # NASDAQ uses '/' for classes (e.g. BRK/B) and '^' for other things.
+        # yfinance uses '-' for classes (e.g. BRK-B).
+        symbols = df['symbol'].tolist()[:limit]
+        cleaned_symbols = []
+        for s in symbols:
+            s = s.replace('/', '-')
+            s = s.replace('^', '-P') # Assumption for preferreds, might need refinement
+            cleaned_symbols.append(s)
+            
+        return cleaned_symbols
+    except Exception as e:
+        print(f"Error fetching US stocks: {e}")
+        return []
+    
+def get_next_day(date_str):
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    next_day = date_obj + timedelta(days=1)
+    return next_day.strftime("%Y-%m-%d")
+
+
+def calculate_start_date(client, period: str, end_dt: datetime) -> datetime:
+    """
+    Calculate start date based on period string.
+    
+    For short periods (1d-5d), uses market hours API to find actual trading days,
+    avoiding weekends and holidays.
+    
+    Args:
+        client: Schwab client for market hours API
+        period: Period string like '1d', '2d', '5d', '1mo', '1y', etc.
+        end_dt: End datetime (timezone-aware)
+        
+    Returns:
+        Start datetime (timezone-aware)
+    """
+    # Map period to number of trading days needed
+    trading_day_periods = {
+        "1d": 1,
+        "2d": 2,
+        "5d": 5,
+    }
+    
+    # Map period to calendar days for longer periods
+    calendar_day_periods = {
+        "1mo": timedelta(days=30),
+        "3mo": timedelta(days=90),
+        "6mo": timedelta(days=180),
+        "1y": timedelta(days=365),
+        "2y": timedelta(days=730),
+        "5y": timedelta(days=1825),
+        "max": timedelta(days=365 * 20),  # 20 years
+    }
+    
+    # For short periods, count actual trading days
+    if period in trading_day_periods:
+        trading_days_needed = trading_day_periods[period]
+        check_date = end_dt.date() - timedelta(days=1)
+        trading_days_found = 0
+        max_lookback = 15  # Safety limit
+        
+        for _ in range(max_lookback):
+            try:
+                resp = client.get_market_hours(
+                    Client.MarketHours.Market.EQUITY,
+                    date=check_date
+                )
+                if resp.status_code == httpx.codes.OK:
+                    data = resp.json()
+                    equity_data = data.get("equity", {})
+                    market_info = equity_data.get("EQ") or equity_data.get("equity") or {}
+                    
+                    if market_info.get("isOpen", False):
+                        trading_days_found += 1
+                        if trading_days_found >= trading_days_needed:
+                            # Return start of this trading day
+                            return datetime.combine(check_date, datetime.min.time()).replace(
+                                tzinfo=ZoneInfo("America/New_York")
+                            )
+            except Exception:
+                pass
+            
+            check_date -= timedelta(days=1)
+        
+        # Fallback if API fails
+        return end_dt - timedelta(days=trading_days_needed + 4)
+    
+    # For longer periods, use calendar days
+    if period in calendar_day_periods:
+        return end_dt - calendar_day_periods[period]
+    
+    # Fallback to 1 year
+    return end_dt - timedelta(days=365)
+
+def speak_symbols(symbols: list) -> None:
+    """
+    Announce confirmed symbols using text-to-speech in background thread.
+    Non-blocking - returns immediately while audio plays.
+    
+    Args:
+        symbols: List of stock symbols to announce
+    """
+    if not symbols:
+        return
+    
+    def _speak():
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 150)  # Speed of speech
+            text = f"Confirmed: {', '.join(symbols)}"
+            
+            # Build message with pauses between repetitions
+            full_text = ". . . ".join([text] * 3)
+            engine.say(full_text)
+            engine.runAndWait()
+            
+            engine.stop()
+        except Exception as e:
+            logger.info(f"TTS error: {e}")
+    
+    # Run in background thread to avoid blocking main loop
+    thread = threading.Thread(target=_speak, daemon=True)
+    thread.start()
+
+
+if __name__ == "__main__":
+    # sp = get_sp500_tickers()
+    # us = get_us_stocks()
+    # print(f"US Tickers: {us[:5]} ... Total: {len(us)}")
+    
+    # Test calculate_start_date
+    print("Testing calculate_start_date...")
+    
+    client = AutoRefreshSchwabClient().client
+    ET = ZoneInfo("America/New_York")
+    
+    # Test with today as end date
+    end_dt = datetime.now(ET)
+    print(f"End date: {end_dt.strftime('%Y-%m-%d %A')}")
+    
+    # Test 2d period - should skip weekends/holidays
+    start_2d = calculate_start_date(client, "2d", end_dt)
+    print(f"  2d period start: {start_2d.strftime('%Y-%m-%d %A')}")
+
+
+CURRENT_NASDAQ100_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nasdaq", "current_nasdaq100_constituents.csv")
+HIST_NASDAQ100_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nasdaq", "nasdaq100_monthly_constituents_backtest_2010_2026.csv")
+
 
 def load_latest_historical_nasdaq100_membership() -> list[str]:
     df = pd.read_csv(HIST_NASDAQ100_FILE)
-    df['month_end_date'] = pd.to_datetime(df['month_end_date'], errors='coerce')
-    df = df.dropna(subset=['month_end_date', 'ticker'])
-    latest_month = df['month_end_date'].max()
-    latest = df[df['month_end_date'] == latest_month].copy()
+    df["month_end_date"] = pd.to_datetime(df["month_end_date"], errors="coerce")
+    df = df.dropna(subset=["month_end_date", "ticker"])
+    latest_month = df["month_end_date"].max()
+    latest = df[df["month_end_date"] == latest_month].copy()
     return sorted({str(t).strip().upper().replace('.', '-') for t in latest['ticker'].tolist()})
 
 
 def write_current_nasdaq100_constituents(tickers: list[str]) -> None:
     os.makedirs(os.path.dirname(CURRENT_NASDAQ100_FILE), exist_ok=True)
-    out = pd.DataFrame({'ticker': sorted(dict.fromkeys([str(t).strip().upper().replace('.', '-') for t in tickers if t]))})
+    out = pd.DataFrame({"ticker": sorted(dict.fromkeys([str(t).strip().upper().replace('.', '-') for t in tickers if t]))})
     out.to_csv(CURRENT_NASDAQ100_FILE, index=False)
 
 
 def update_historical_nasdaq100_tail(tickers: list[str], as_of: datetime | None = None) -> None:
-    as_of = as_of or datetime.now(ZoneInfo('America/New_York'))
-    month_end = pd.Timestamp(as_of.date()).to_period('M').to_timestamp('M')
+    as_of = as_of or datetime.now(ZoneInfo("America/New_York"))
+    month_end = pd.Timestamp(as_of.date()).to_period("M").to_timestamp("M")
     df = pd.read_csv(HIST_NASDAQ100_FILE)
-    if 'month_end_date' not in df.columns or 'ticker' not in df.columns:
-        raise ValueError('historical membership file missing required columns')
-    df['month_end_date'] = pd.to_datetime(df['month_end_date'], errors='coerce')
+    df["month_end_date"] = pd.to_datetime(df["month_end_date"], errors="coerce")
     normalized = sorted(dict.fromkeys([str(t).strip().upper().replace('.', '-') for t in tickers if t]))
-    existing_mask = df['month_end_date'] == month_end
+    existing_mask = df["month_end_date"] == month_end
+    cols = list(df.columns)
+    template = {c: '' for c in cols}
+    if 'month' in cols:
+        template['month'] = month_end.strftime('%Y-%m')
+    template['month_end_date'] = month_end.strftime('%Y-%m-%d')
+    if 'membership_basis' in cols:
+        template['membership_basis'] = 'month_end'
+    if 'snapshot_method' in cols:
+        template['snapshot_method'] = 'live_refresh'
+    if 'snapshot_inferred' in cols:
+        template['snapshot_inferred'] = 'no'
+    if 'membership_confidence' in cols:
+        template['membership_confidence'] = 'high'
+    if 'notes' in cols:
+        template['notes'] = 'Updated from current Nasdaq-100 constituent refresh for live trading.'
+    new_rows = []
+    for t in normalized:
+        row = template.copy()
+        row['ticker'] = t
+        if 'raw_reconstructed_ticker' in cols:
+            row['raw_reconstructed_ticker'] = t
+        new_rows.append(row)
     if existing_mask.any():
-        # Only replace the latest-month slice; keep everything before untouched and in original order.
-        latest_rows = df[existing_mask].copy()
-        cols = list(df.columns)
-        template = {c: '' for c in cols}
-        if 'month' in cols:
-            template['month'] = month_end.strftime('%Y-%m')
-        template['month_end_date'] = month_end.strftime('%Y-%m-%d')
-        if 'membership_basis' in cols:
-            template['membership_basis'] = 'month_end'
-        if 'snapshot_method' in cols:
-            template['snapshot_method'] = 'live_refresh'
-        if 'snapshot_inferred' in cols:
-            template['snapshot_inferred'] = 'no'
-        if 'membership_confidence' in cols:
-            template['membership_confidence'] = 'high'
-        if 'notes' in cols:
-            template['notes'] = 'Updated from current Nasdaq-100 constituent refresh for live trading.'
-        new_rows = []
-        for t in normalized:
-            row = template.copy()
-            row['ticker'] = t
-            if 'raw_reconstructed_ticker' in cols:
-                row['raw_reconstructed_ticker'] = t
-            new_rows.append(row)
-        before = df.loc[: existing_mask.idxmax()-1] if existing_mask.idxmax() > 0 else df.iloc[0:0]
-        after_start = df[existing_mask].index.max() + 1
-        after = df.loc[after_start:] if after_start < len(df) else df.iloc[0:0]
+        first_idx = existing_mask.idxmax()
+        last_idx = df[existing_mask].index.max()
+        before = df.loc[:first_idx - 1] if first_idx > 0 else df.iloc[0:0]
+        after = df.loc[last_idx + 1:] if last_idx + 1 < len(df) else df.iloc[0:0]
         out = pd.concat([before, pd.DataFrame(new_rows, columns=cols), after], ignore_index=True)
-        out.to_csv(HIST_NASDAQ100_FILE, index=False)
     else:
-        cols = list(df.columns)
-        template = {c: '' for c in cols}
-        if 'month' in cols:
-            template['month'] = month_end.strftime('%Y-%m')
-        template['month_end_date'] = month_end.strftime('%Y-%m-%d')
-        if 'membership_basis' in cols:
-            template['membership_basis'] = 'month_end'
-        if 'snapshot_method' in cols:
-            template['snapshot_method'] = 'live_refresh'
-        if 'snapshot_inferred' in cols:
-            template['snapshot_inferred'] = 'no'
-        if 'membership_confidence' in cols:
-            template['membership_confidence'] = 'high'
-        if 'notes' in cols:
-            template['notes'] = 'Appended from current Nasdaq-100 constituent refresh for live trading.'
-        new_rows = []
-        for t in normalized:
-            row = template.copy()
-            row['ticker'] = t
-            if 'raw_reconstructed_ticker' in cols:
-                row['raw_reconstructed_ticker'] = t
-            new_rows.append(row)
         out = pd.concat([df, pd.DataFrame(new_rows, columns=cols)], ignore_index=True)
-        out.to_csv(HIST_NASDAQ100_FILE, index=False)
+    out.to_csv(HIST_NASDAQ100_FILE, index=False)
 
 
 def refresh_current_nasdaq100_constituents(as_of: datetime | None = None) -> list[str]:
@@ -212,10 +406,10 @@ def refresh_current_nasdaq100_constituents(as_of: datetime | None = None) -> lis
             raise ValueError('empty current Nasdaq-100 ticker list')
         write_current_nasdaq100_constituents(tickers)
         update_historical_nasdaq100_tail(tickers, as_of=as_of)
-        logger.info(f'Refreshed current Nasdaq-100 constituents ({len(tickers)} names)')
+        logger.info(f"Refreshed current Nasdaq-100 constituents ({len(tickers)} names)")
         return tickers
     except Exception as e:
-        logger.info(f'Current Nasdaq-100 refresh failed, falling back to latest historical month: {e}')
+        logger.info(f"Current Nasdaq-100 refresh failed, falling back to latest historical month: {e}")
         tickers = load_latest_historical_nasdaq100_membership()
         write_current_nasdaq100_constituents(tickers)
         return tickers
@@ -229,77 +423,3 @@ def load_current_nasdaq100_constituents() -> list[str]:
             if vals:
                 return sorted(dict.fromkeys(vals))
     return load_latest_historical_nasdaq100_membership()
-
-
-def get_us_stocks(limit=-1):
-    url = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true'
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        rows = data['data']['rows']
-        df = pd.DataFrame(rows)
-        symbols = df['symbol'].tolist()[:limit]
-        cleaned = []
-        for s in symbols:
-            s = s.replace('/', '-').replace('^', '-P')
-            cleaned.append(s)
-        return cleaned
-    except Exception as e:
-        print(f'Error fetching US stocks: {e}')
-        return []
-
-def get_next_day(date_str):
-    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-    next_day = date_obj + timedelta(days=1)
-    return next_day.strftime('%Y-%m-%d')
-
-# keep rest of legacy helpers below as-is
-
-def calculate_start_date(client, period: str, end_dt: datetime) -> datetime:
-    trading_day_periods = {'1d': 1, '2d': 2, '5d': 5}
-    calendar_day_periods = {
-        '1mo': timedelta(days=30), '3mo': timedelta(days=90), '6mo': timedelta(days=180),
-        '1y': timedelta(days=365), '2y': timedelta(days=730), '5y': timedelta(days=1825), 'max': timedelta(days=365 * 20),
-    }
-    if period in trading_day_periods:
-        trading_days_needed = trading_day_periods[period]
-        check_date = end_dt.date() - timedelta(days=1)
-        trading_days_found = 0
-        for _ in range(15):
-            try:
-                resp = client.get_market_hours(Client.MarketHours.Market.EQUITY, date=check_date)
-                if resp.status_code == httpx.codes.OK:
-                    data = resp.json()
-                    equity_data = data.get('equity', {})
-                    market_info = equity_data.get('EQ') or equity_data.get('equity') or {}
-                    if market_info.get('isOpen', False):
-                        trading_days_found += 1
-                        if trading_days_found >= trading_days_needed:
-                            return datetime.combine(check_date, datetime.min.time()).replace(tzinfo=ZoneInfo('America/New_York'))
-            except Exception:
-                pass
-            check_date -= timedelta(days=1)
-        return end_dt - timedelta(days=trading_days_needed + 4)
-    if period in calendar_day_periods:
-        return end_dt - calendar_day_periods[period]
-    return end_dt - timedelta(days=365)
-
-
-def speak_symbols(symbols: list) -> None:
-    if not symbols:
-        return
-    def _speak():
-        try:
-            engine = pyttsx3.init()
-            engine.setProperty('rate', 150)
-            text = f"Confirmed: {', '.join(symbols)}"
-            full_text = '. . . '.join([text] * 3)
-            engine.say(full_text)
-            engine.runAndWait()
-            engine.stop()
-        except Exception as e:
-            logger.info(f'TTS error: {e}')
-    thread = threading.Thread(target=_speak, daemon=True)
-    thread.start()
