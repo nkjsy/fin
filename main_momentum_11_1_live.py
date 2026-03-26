@@ -5,12 +5,11 @@ from datetime import datetime
 from typing import Dict
 
 from broker import PaperBroker, SchwabBroker
+from broker.interfaces import OrderSide, OrderType
 from client import AutoRefreshSchwabClient
-from data_manager import DataManager
-from live_momentum_portfolio import MomentumLiveTrader, ET
+from live_momentum_portfolio import ET
 from live_signal_state import load_latest_holdings, write_state_file
 from logger import enable_file_logging, get_logger
-from providers.schwab_lib import SchwabProvider
 from strategy.momentum_11_1 import Momentum11_1Strategy
 
 from main_momentum_11_1_regime_immediate import (
@@ -28,9 +27,7 @@ from main_momentum_11_1_regime_immediate import (
 enable_file_logging()
 logger = get_logger('MOMO-LIVE-MAIN')
 
-DATA_DIR = 'data'
 INITIAL_CAPITAL = 10000.0
-PRICE_BUFFER_PCT = 0.002
 SIGNAL_ONLY_DEFAULT = True
 
 
@@ -100,7 +97,6 @@ def main():
     mode, selected_symbols, quotes = build_target_plan(now_et)
     current_holdings = load_latest_holdings()
 
-    # Use latest saved portfolio state as current holdings baseline; do not read Schwab positions.
     current_value = 0.0
     for symbol, qty in current_holdings.items():
         px = quotes.get(symbol, 0.0)
@@ -133,31 +129,37 @@ def main():
     logger.info('-' * 60)
     logger.info('TARGET HOLDINGS')
     for symbol in selected_symbols:
-        logger.info(f'  {symbol}: target={target_shares[symbol]} shares | ref=${quotes.get(symbol, 0.0):.2f}')
+        logger.info(f'  {symbol}: target={target_shares[symbol]} shares | close=${quotes.get(symbol, 0.0):.2f}')
     logger.info('-' * 60)
     logger.info('RECOMMENDED ACTIONS')
     for line in order_lines:
         logger.info(f'  {line}')
 
     if live:
+        logger.info('LIVE EXECUTION ENABLED -- placing after-hours LIMIT orders at close price')
         client_wrapper = AutoRefreshSchwabClient()
-        provider = SchwabProvider(client_wrapper)
-        data_manager = DataManager(DATA_DIR, provider)
         broker = SchwabBroker(client_wrapper.client)
-        strategy = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=(TOP_N_UP if mode == 'Top3' else TOP_N_DOWN))
-        trader = MomentumLiveTrader(
-            client_wrapper=client_wrapper,
-            broker=broker,
-            data_manager=data_manager,
-            strategy=strategy,
-            universe_by_month=universe_by_month if 'universe_by_month' in locals() else {},
-            history_period='3y',
-            benchmark_symbol='QQQ',
-            price_buffer_pct=PRICE_BUFFER_PCT,
-        )
-        logger.info('LIVE EXECUTION ENABLED -- executing via broker...')
-        # Intentionally not deriving from Schwab positions; this mode is retained but not the default path.
-        # A future iteration can convert target_shares into actual order placement directly.
+        for symbol in sorted(set(current_holdings.keys()) | set(target_shares.keys())):
+            current_qty = int(current_holdings.get(symbol, 0))
+            target_qty = int(target_shares.get(symbol, 0))
+            delta = target_qty - current_qty
+            if delta == 0:
+                continue
+            px = float(quotes.get(symbol, 0.0))
+            if px <= 0:
+                logger.info(f'SKIP {symbol}: no valid close price')
+                continue
+            side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+            qty = abs(delta)
+            order_id = broker.place_order(
+                symbol=symbol,
+                side=side,
+                quantity=qty,
+                order_type=OrderType.LIMIT,
+                limit_price=px,
+                reason=f'11-1 live signal | {mode} | after-hours limit at close',
+            )
+            logger.info(f'LIVE ORDER: {side.value} {qty} {symbol} @ ${px:.2f} | order_id={order_id}')
 
     path = write_state_file(
         as_of=now_et,
