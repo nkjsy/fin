@@ -339,12 +339,36 @@ After the core strategy is working, consider:
 | Top5 above / Top10 below (half, monthly switch) | 28.86% | -45.38% | 0.984 | 0.636 | +5962.55% |
 | **Top3 above / Top10 below (full, immediate switch)** | **37.85%** | **-48.71%** | **1.069** | **0.777** | **+18000.23%** |
 
+## 16) Backtest Result Charts
+
+### Top5 Original
+
+![Top5 Original](assets/top5_original.png)
+
+### Top10 Original
+
+![Top10 Original](assets/top10_original.png)
+
+### Top5 above MA200 / Top10 below MA200 (Monthly Full)
+
+![Top5 Top10 Full](assets/top5_top10_full.png)
+
+### Top5 above MA200 / Top10 below MA200 (Monthly Half)
+
+![Top5 Top10 Half](assets/top5_top10_half.png)
+
+### Best Variant: Immediate Switch (Current Default)
+
+![Immediate Switch](assets/immediate_regime_switch.png)
+
 ### Chart artifacts
 
 Tracked chart files:
 - `assets/immediate_regime_switch.png` — current best variant chart
-- `assets/top5_top10_full.png` — Top5 above / Top10 below full-switch chart (add when regenerated)
-- `assets/top5_top10_half.png` — Top5 above / Top10 below half-switch chart (add when regenerated)
+- `assets/top5_original.png` — Top5 original chart
+- `assets/top10_original.png` — Top10 original chart
+- `assets/top5_top10_full.png` — Top5 above / Top10 below full-switch chart
+- `assets/top5_top10_half.png` — Top5 above / Top10 below half-switch chart
 
 ### How to run
 
