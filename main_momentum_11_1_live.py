@@ -1,4 +1,5 @@
 from __future__ import annotations
+import pandas as pd
 
 import argparse
 from datetime import datetime
@@ -23,7 +24,7 @@ enable_file_logging()
 logger = get_logger('MOMO-LIVE-MAIN')
 
 ET = ZoneInfo('America/New_York')
-INITIAL_CAPITAL = 10000.0
+INITIAL_CAPITAL = 100000.0
 SIGNAL_ONLY_DEFAULT = True
 
 
