@@ -103,8 +103,12 @@ def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str
         elif delta < 0:
             lines.append(f'SELL | {symbol} | price=${px:.2f} | delta={abs(delta)} | current={current_qty} | target={target_qty}')
         else:
+<<<<<<< HEAD
             if symbol != 'NONE':
                 lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
+=======
+            lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
+>>>>>>> baa153b (Add quote price to actions and show Top3 inside Top10 mode)
     return lines
 
 
