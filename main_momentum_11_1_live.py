@@ -105,7 +105,8 @@ def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str
         elif delta < 0:
             lines.append(f'SELL | {symbol} | price=${px:.2f} | delta={abs(delta)} | current={current_qty} | target={target_qty}')
         else:
-            lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
+            if symbol != 'NONE':
+                lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
     return lines
 
 
