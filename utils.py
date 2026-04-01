@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import requests
 import sys
@@ -402,8 +403,9 @@ def update_historical_nasdaq100_tail(tickers: list[str], as_of: datetime | None 
 def refresh_current_nasdaq100_constituents(as_of: datetime | None = None) -> list[str]:
     try:
         tickers = get_nasdaq100_tickers()
-        if not tickers:
-            raise ValueError('empty current Nasdaq-100 ticker list')
+        # Guard against partial/failed scrapes returning a tiny fallback list.
+        if not tickers or len(tickers) < 80:
+            raise ValueError(f'invalid current Nasdaq-100 ticker list size: {len(tickers) if tickers else 0}')
         write_current_nasdaq100_constituents(tickers)
         update_historical_nasdaq100_tail(tickers, as_of=as_of)
         logger.info(f"Refreshed current Nasdaq-100 constituents ({len(tickers)} names)")
