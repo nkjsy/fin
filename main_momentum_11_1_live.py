@@ -92,19 +92,21 @@ def build_target_plan(as_of: datetime):
     return mode, selected, latest_quotes, regime
 
 
-def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str, int]) -> list[str]:
+def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str, int], quotes: Dict[str, float]) -> list[str]:
     lines: list[str] = []
     symbols = sorted(set(current_holdings.keys()) | set(target_shares.keys()))
     for symbol in symbols:
         current_qty = int(current_holdings.get(symbol, 0))
         target_qty = int(target_shares.get(symbol, 0))
         delta = target_qty - current_qty
+        px = float(quotes.get(symbol, 0.0))
         if delta > 0:
-            lines.append(f'BUY | {symbol} | delta={delta} | current={current_qty} | target={target_qty}')
+            lines.append(f'BUY | {symbol} | price=${px:.2f} | delta={delta} | current={current_qty} | target={target_qty}')
         elif delta < 0:
-            lines.append(f'SELL | {symbol} | delta={abs(delta)} | current={current_qty} | target={target_qty}')
+            lines.append(f'SELL | {symbol} | price=${px:.2f} | delta={abs(delta)} | current={current_qty} | target={target_qty}')
         else:
-            lines.append(f'HOLD | {symbol} | delta=0 | current={current_qty} | target={target_qty}')
+            if symbol != 'NONE':
+                lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
     return lines
 
 
@@ -132,7 +134,7 @@ def main():
         else:
             target_shares[symbol] = 0
 
-    order_lines = format_order_lines(current_holdings, target_shares)
+    order_lines = format_order_lines(current_holdings, target_shares, quotes)
 
     logger.info('=' * 60)
     logger.info('LIVE MOMENTUM SIGNAL GENERATOR')
@@ -154,6 +156,8 @@ def main():
         logger.info('  none')
     logger.info('-' * 60)
     logger.info('TARGET HOLDINGS')
+    if mode == 'Top10':
+        logger.info(f"  Top10里的Top3参考: {', '.join(selected_symbols[:3])}")
     for symbol in selected_symbols:
         logger.info(f'  {symbol}: target={target_shares[symbol]} shares | close=${quotes.get(symbol, 0.0):.2f}')
     logger.info('-' * 60)
