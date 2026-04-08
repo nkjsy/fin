@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import requests
 import sys
@@ -167,21 +168,44 @@ def get_sp500_tickers():
         return ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"] # Fallback
 
 
+def _normalize_tickers(values):
+    out = []
+    for symbol in values:
+        s = str(symbol).strip().upper().replace('.', '-')
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 def get_nasdaq100_tickers():
+    sources = [
+        'https://en.wikipedia.org/wiki/Nasdaq-100',
+        'https://www.slickcharts.com/nasdaq100',
+    ]
+    for url in sources:
+        try:
+            tables = pd.read_html(url)
+            for df in tables:
+                columns = {str(col).strip() for col in df.columns}
+                if 'Ticker' in columns:
+                    vals = _normalize_tickers(df['Ticker'].dropna().tolist())
+                    if len(vals) >= 80:
+                        return vals
+                if 'Symbol' in columns:
+                    vals = _normalize_tickers(df['Symbol'].dropna().tolist())
+                    if len(vals) >= 80:
+                        return vals
+            logger.info(f'Nasdaq-100 scrape from {url} returned no valid ticker table')
+        except Exception as e:
+            logger.info(f'Error fetching Nasdaq-100 from {url}: {e}')
+    # final fallback: historical latest month
     try:
-        tables = pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')
-        for df in tables:
-            columns = {str(col).strip() for col in df.columns}
-            if "Ticker" in columns:
-                series = df["Ticker"]
-                return [str(symbol).strip() for symbol in series.dropna().tolist()]
-            if "Symbol" in columns:
-                series = df["Symbol"]
-                return [str(symbol).strip() for symbol in series.dropna().tolist()]
-        raise ValueError("Ticker column not found in Nasdaq-100 tables")
+        vals = load_latest_historical_nasdaq100_membership()
+        logger.info(f'Falling back to latest historical Nasdaq-100 membership ({len(vals)} names)')
+        return vals
     except Exception as e:
-        print(f"Error fetching Nasdaq-100: {e}")
-        return ["AAPL", "MSFT", "NVDA", "AMZN", "META"]
+        logger.info(f'Historical Nasdaq-100 fallback failed: {e}')
+        return ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META']
 
 def get_us_stocks(limit=-1):
     url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true"
@@ -402,8 +426,9 @@ def update_historical_nasdaq100_tail(tickers: list[str], as_of: datetime | None 
 def refresh_current_nasdaq100_constituents(as_of: datetime | None = None) -> list[str]:
     try:
         tickers = get_nasdaq100_tickers()
-        if not tickers:
-            raise ValueError('empty current Nasdaq-100 ticker list')
+        # Guard against partial/failed scrapes returning a tiny fallback list.
+        if not tickers or len(tickers) < 80:
+            raise ValueError(f'invalid current Nasdaq-100 ticker list size: {len(tickers) if tickers else 0}')
         write_current_nasdaq100_constituents(tickers)
         update_historical_nasdaq100_tail(tickers, as_of=as_of)
         logger.info(f"Refreshed current Nasdaq-100 constituents ({len(tickers)} names)")
