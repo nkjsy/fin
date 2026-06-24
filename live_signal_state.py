@@ -80,6 +80,7 @@ def write_state_file(
     quotes: Dict[str, float],
     orders: list[str],
     total_equity: float,
+    momentum_order: list[str] | None = None,
 ) -> Path:
     path = get_state_log_path(as_of)
     lines: list[str] = []
@@ -94,9 +95,27 @@ def write_state_file(
     else:
         lines.append('NONE | 0')
     lines.append('')
+    lines.append('MOMENTUM_ORDER:')
+    ordered_targets = []
+    seen_targets = set()
+    if momentum_order:
+        for symbol in momentum_order:
+            if symbol in target_shares and symbol not in seen_targets:
+                ordered_targets.append(symbol)
+                seen_targets.add(symbol)
+    for symbol in sorted(target_shares):
+        if symbol not in seen_targets:
+            ordered_targets.append(symbol)
+            seen_targets.add(symbol)
+    if ordered_targets:
+        for rank, symbol in enumerate(ordered_targets, start=1):
+            lines.append(f"{rank} | {symbol}")
+    else:
+        lines.append('NONE')
+    lines.append('')
     lines.append('TARGET_HOLDINGS:')
-    if target_shares:
-        for symbol in sorted(target_shares):
+    if ordered_targets:
+        for symbol in ordered_targets:
             px = quotes.get(symbol, 0.0)
             lines.append(f"{symbol} | {int(target_shares[symbol])} | {px:.2f}")
     else:

@@ -39,11 +39,10 @@ def build_target_plan(as_of: datetime):
     strategy_up = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=TOP_N_UP)
     strategy_down = Momentum11_1Strategy(lookback_days=LOOKBACK_DAYS, skip_days=SKIP_DAYS, top_n=TOP_N_DOWN)
 
-    month_end_today = (as_of.date() == (pd.Timestamp(as_of.date()) + pd.offsets.BMonthEnd(0)).date())
-    if month_end_today:
-        universe = refresh_current_nasdaq100_constituents(as_of=as_of)
-    else:
-        universe = load_current_nasdaq100_constituents()
+    # Always refresh from the current Nasdaq-100 source for live/paper signals.
+    # Eligibility is current membership only; tickers do not need to have been
+    # Nasdaq-100 members during the full 11-month momentum lookback.
+    universe = refresh_current_nasdaq100_constituents(as_of=as_of)
 
     price_data = {}
     for ticker in universe:
@@ -57,19 +56,33 @@ def build_target_plan(as_of: datetime):
     trend_ok = bench_close > qqq_ma
 
     close_matrix = strategy_up.build_close_matrix(price_data).sort_index().ffill()
-    latest_ts = pd.Timestamp(close_matrix.index[-1])
-    latest_naive = latest_ts.tz_localize(None) if latest_ts.tz is not None else latest_ts
-    month_end_key = latest_naive.to_period('M').to_timestamp('M')
-    current_universe_map = {month_end_key: universe}
-    _, sel_up = strategy_up.select_portfolio(close_matrix, eligible_universe_by_date=current_universe_map)
-    _, sel_down = strategy_down.select_portfolio(close_matrix, eligible_universe_by_date=current_universe_map)
-
     latest_date = close_matrix.index[-1]
+    latest_ts = pd.Timestamp(latest_date)
+    latest_naive = latest_ts.tz_localize(None) if latest_ts.tz is not None else latest_ts
     qqq_close = float(bench_close.asof(latest_date)) if pd.notna(bench_close.asof(latest_date)) else 0.0
     qqq_ma200 = float(qqq_ma.asof(latest_date)) if pd.notna(qqq_ma.asof(latest_date)) else 0.0
     trend_is_on = bool(trend_ok.asof(latest_date)) if pd.notna(trend_ok.asof(latest_date)) else False
+
+    # Hybrid rank policy:
+    # - risk-on (QQQ > MA200): rerank using latest close every run
+    # - risk-off (QQQ <= MA200): freeze ranks between monthly rank refreshes
+    if trend_is_on:
+        rank_date = latest_ts
+    else:
+        prior_dates = close_matrix.index[close_matrix.index < latest_date]
+        if len(prior_dates) == 0 or pd.Timestamp(prior_dates[-1]).to_period('M') != latest_naive.to_period('M'):
+            rank_date = latest_ts
+        else:
+            rank_candidates = close_matrix.index[close_matrix.index.to_series().dt.to_period('M') < latest_naive.to_period('M')]
+            rank_date = pd.Timestamp(rank_candidates[-1]) if len(rank_candidates) else latest_ts
+    rank_naive = rank_date.tz_localize(None) if rank_date.tz is not None else rank_date
+    rank_month_key = rank_naive.to_period('M').to_timestamp('M')
+    current_universe_map = {rank_month_key: universe}
+    close_for_rank = close_matrix.loc[:rank_date]
+    _, sel_up = strategy_up.select_portfolio(close_for_rank, eligible_universe_by_date=current_universe_map)
+    _, sel_down = strategy_down.select_portfolio(close_for_rank, eligible_universe_by_date=current_universe_map)
     mode = 'Top3' if trend_is_on else 'Top10'
-    selected = sel_up.get(latest_date, []) if mode == 'Top3' else sel_down.get(latest_date, [])
+    selected = sel_up.get(rank_date, []) if mode == 'Top3' else sel_down.get(rank_date, [])
 
     quote_symbols = sorted(set(selected) | {'QQQ'})
     latest_quotes: Dict[str, float] = {}
@@ -90,9 +103,24 @@ def build_target_plan(as_of: datetime):
     return mode, selected, latest_quotes, regime
 
 
-def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str, int], quotes: Dict[str, float]) -> list[str]:
+def format_order_lines(
+    current_holdings: Dict[str, int],
+    target_shares: Dict[str, int],
+    quotes: Dict[str, float],
+    momentum_order: list[str] | None = None,
+) -> list[str]:
     lines: list[str] = []
-    symbols = sorted(set(current_holdings.keys()) | set(target_shares.keys()))
+    symbols: list[str] = []
+    seen = set()
+    if momentum_order:
+        for symbol in momentum_order:
+            if symbol in target_shares and symbol not in seen:
+                symbols.append(symbol)
+                seen.add(symbol)
+    for symbol in sorted(set(current_holdings.keys()) | set(target_shares.keys())):
+        if symbol not in seen:
+            symbols.append(symbol)
+            seen.add(symbol)
     for symbol in symbols:
         current_qty = int(current_holdings.get(symbol, 0))
         target_qty = int(target_shares.get(symbol, 0))
@@ -103,12 +131,8 @@ def format_order_lines(current_holdings: Dict[str, int], target_shares: Dict[str
         elif delta < 0:
             lines.append(f'SELL | {symbol} | price=${px:.2f} | delta={abs(delta)} | current={current_qty} | target={target_qty}')
         else:
-<<<<<<< HEAD
             if symbol != 'NONE':
                 lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
-=======
-            lines.append(f'HOLD | {symbol} | price=${px:.2f} | delta=0 | current={current_qty} | target={target_qty}')
->>>>>>> baa153b (Add quote price to actions and show Top3 inside Top10 mode)
     return lines
 
 
@@ -136,7 +160,7 @@ def main():
         else:
             target_shares[symbol] = 0
 
-    order_lines = format_order_lines(current_holdings, target_shares, quotes)
+    order_lines = format_order_lines(current_holdings, target_shares, quotes, momentum_order=selected_symbols)
 
     logger.info('=' * 60)
     logger.info('LIVE MOMENTUM SIGNAL GENERATOR')
@@ -161,8 +185,8 @@ def main():
     logger.info('TARGET HOLDINGS')
     if mode == 'Top10':
         logger.info(f"  Top10里的Top3参考: {', '.join(selected_symbols[:3])}")
-    for symbol in selected_symbols:
-        logger.info(f'  {symbol}: target={target_shares[symbol]} shares | close=${quotes.get(symbol, 0.0):.2f}')
+    for rank, symbol in enumerate(selected_symbols, start=1):
+        logger.info(f'  #{rank} {symbol}: target={target_shares[symbol]} shares | close=${quotes.get(symbol, 0.0):.2f}')
     logger.info('-' * 60)
     logger.info('RECOMMENDED ACTIONS')
     for line in order_lines:
@@ -180,6 +204,7 @@ def main():
         quotes=quotes,
         orders=order_lines,
         total_equity=total_equity,
+        momentum_order=selected_symbols,
     )
     logger.info(f'Wrote state log: {path}')
     logger.info('=' * 60)
