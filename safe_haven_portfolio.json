@@ -1,0 +1,11 @@
+{
+  "spy_value": 0.0,
+  "sgov_value": 0.0,
+  "cash": 52000.0,
+  "puts": [],
+  "year_start_equity": 52000.0,
+  "premium_spent_ytd": 0.0,
+  "premium_year": 2026,
+  "last_put_purchase": null,
+  "completed_drawdown_stage": 0
+}
